@@ -181,7 +181,8 @@ defmodule Stonk do
     IO.puts("  fx: #{inspect(fx)}")
 
     markets_data =
-      Enum.map(prepared, fn m ->
+      prepared
+      |> Enum.map(fn m ->
         rows =
           m.tickers
           |> Enum.map(fn t -> build_row(t, quotes[t], fx, m) end)
@@ -190,8 +191,14 @@ defmodule Stonk do
           |> Enum.take(100)
           |> rank()
 
-        Map.put(m, :rows, rows)
+        m |> Map.put(:rows, rows) |> Map.put(:total, Enum.sum(Enum.map(rows, & &1.mcap_usd)))
       end)
+      # Order markets by their tracked market cap (sum of top-100), not a hand-coded list.
+      |> Enum.sort_by(& &1.total, :desc)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {m, i} -> Map.put(m, :mrank, i) end)
+
+    IO.puts("  market ranking: " <> Enum.map_join(markets_data, ", ", &"#{&1.mrank}.#{&1.name} #{Render.human_usd(&1.total)}"))
 
     global =
       markets_data
@@ -415,8 +422,8 @@ defmodule Render do
         """
         <div class="card">
           <button class="card-head" data-tab="#{m.id}">
-            <span class="ch-l">#{m.flag} #{e(m.name)}</span>
-            <span class="ch-r">Top 100 →</span>
+            <span class="ch-l"><span class="ch-rank">#{m.mrank}</span><span class="ch-name">#{m.flag} #{e(m.name)}</span></span>
+            <span class="ch-r"><span class="ch-cap">#{human_usd(m.total)}</span><span class="ch-go">Top 100 →</span></span>
           </button>
           <table class="mini">#{rows}</table>
         </div>
@@ -582,10 +589,18 @@ defmodule Render do
     .card{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;
       transition:.2s}
     .card:hover{border-color:var(--accent);transform:translateY(-2px)}
-    .card-head{width:100%;display:flex;align-items:center;justify-content:space-between;
-      padding:15px 17px;background:var(--surface2);border:none;border-bottom:1px solid var(--border);
-      cursor:pointer;color:var(--text);font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:15.5px}
-    .ch-r{color:var(--accent);font-family:"Instrument Sans";font-size:12.5px;font-weight:600}
+    .card-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;
+      padding:13px 15px;background:var(--surface2);border:none;border-bottom:1px solid var(--border);
+      cursor:pointer;color:var(--text);text-align:left}
+    .ch-l{display:flex;align-items:center;gap:10px;min-width:0}
+    .ch-rank{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:8px;
+      background:var(--accent);color:#06120c;font-family:"JetBrains Mono",monospace;font-weight:700;font-size:12px}
+    :root[data-theme="light"] .ch-rank{color:#fff}
+    .ch-name{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:15px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .ch-r{flex:none;display:flex;flex-direction:column;align-items:flex-end;line-height:1.25}
+    .ch-cap{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:13.5px;color:var(--text)}
+    .ch-go{color:var(--accent);font-family:"Instrument Sans";font-size:11.5px;font-weight:600}
     table.mini{width:100%;border-collapse:collapse}
     .mini td{padding:9px 16px;border-bottom:1px solid var(--border)}
     .mini tr:last-child td{border-bottom:none}
