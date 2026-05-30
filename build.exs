@@ -125,14 +125,15 @@ defmodule Stonk do
   # Yahoo frequently rate-limits cloud/CI IPs, so retry the cookie+crumb dance
   # several times with backoff, trying both cookie sources and crumb hosts.
   defp crumb_handshake(attempt \\ 1)
-  defp crumb_handshake(attempt) when attempt > 6, do: :error
+  defp crumb_handshake(attempt) when attempt > 8, do: :error
   defp crumb_handshake(attempt) do
     case attempt_handshake() do
       {:ok, _, _} = ok ->
         ok
 
       :error ->
-        Process.sleep(1200 * attempt)
+        if attempt == 1, do: IO.puts("  crumb handshake throttled, retrying...")
+        Process.sleep(2000 * attempt)
         crumb_handshake(attempt + 1)
     end
   end

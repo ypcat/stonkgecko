@@ -2,8 +2,10 @@ name: Build & Deploy stonkgecko
 
 on:
   schedule:
-    # Daily at 06:00 UTC (after US market close, before Asia open settles)
-    - cron: "0 6 * * *"
+    # Every 6 hours. Yahoo intermittently rate-limits CI runners; multiple
+    # attempts per day mean a blocked window doesn't skip the daily refresh
+    # (the build aborts without deploying when it can't fetch enough data).
+    - cron: "0 */6 * * *"
   push:
     branches: [main]
   workflow_dispatch: {}
