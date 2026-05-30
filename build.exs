@@ -282,10 +282,6 @@ defmodule Render do
     """
   end
 
-  defp favicon_data_uri do
-    "data:image/svg+xml;utf8," <> URI.encode(gecko_svg(true) |> String.replace("\n", "") |> String.replace("\"", "'"))
-  end
-
   # ---- Page ----------------------------------------------------------------
 
   def page(markets, global, tracked, total) do
