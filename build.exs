@@ -1,178 +1,125 @@
 # stonkgecko — a single self-contained Elixir script that builds a static,
-# CoinGecko-inspired stock tracker for the world's top 10 stock markets,
-# ranking each market's largest companies by market capitalization.
+# CoinGecko-inspired stock tracker for the world's major stock markets.
 #
-# Run with:  elixir build.exs
-# Output:    public/index.html  (deployed to GitHub Pages by the daily Action)
+#   * Home tab   — each market's top 10 by market cap
+#   * Global tab — top 100 stocks across all markets, ranked by USD market cap
+#   * Market tab — each market's top 100 by market cap
 #
-# Data strategy (no API key required):
-#   * Live price comes from Yahoo Finance's v8 chart endpoint (most reliable,
-#     needs no crumb/cookie).
-#   * Market cap = price x shares_outstanding, using embedded share counts.
-#   * We opportunistically try the v7 quote endpoint (cookie+crumb handshake)
-#     to override with the *exact* reported market cap when it's reachable.
-#   * Everything is converted to USD via live FX rates (also from the chart
-#     endpoint) so markets are comparable; ranking is within each market.
-# If FMP_API_KEY is set, the exact market cap from Financial Modeling Prep is
-# preferred when available.
+# Run with:  elixir build.exs   ->  writes public/index.html (+ favicon, CNAME)
+#
+# Data (no API key required): Yahoo Finance v7 quote endpoint (batched, with a
+# cookie+crumb handshake) gives price + marketCap + change + name in one call.
+# Market caps are converted to USD via live FX (chart endpoint) so markets are
+# comparable. Tickers Yahoo doesn't recognize are dropped automatically, so the
+# embedded candidate lists only need to be a superset — ranking is live.
 
 Mix.install([{:req, "~> 0.5"}])
 
 defmodule Stonk do
-  @user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+  @ua "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+  @euronext_suffixes ~w(.PA .AS .BR .LS .IR .OL .MI)
 
-  # The world's top 10 stock markets by total market capitalization.
-  # Each market lists its largest companies (Yahoo-formatted tickers); the
-  # script fetches live data and re-ranks them by market cap at build time.
+  # Markets in rough descending order of total capitalization. `suffix` drives
+  # validation: "" = US (no dot), :euronext = any Euronext venue suffix,
+  # otherwise the exact Yahoo suffix.
   def markets do
     [
-      %{name: "NASDAQ", country: "United States", flag: "🇺🇸", currency: "USD",
-        tickers: ~w(AAPL MSFT NVDA GOOGL AMZN META TSLA AVGO COST NFLX)},
-      %{name: "NYSE", country: "United States", flag: "🇺🇸", currency: "USD",
-        tickers: ~w(BRK-B JPM WMT V JNJ XOM PG HD BAC KO)},
-      %{name: "Shanghai Stock Exchange", country: "China", flag: "🇨🇳", currency: "CNY",
-        tickers: ~w(600519.SS 601398.SS 601857.SS 600941.SS 601288.SS 601988.SS 600036.SS 601628.SS 600900.SS 601318.SS)},
-      %{name: "Euronext", country: "European Union", flag: "🇪🇺", currency: "EUR",
-        tickers: ~w(MC.PA RMS.PA OR.PA TTE.PA SAN.PA AIR.PA SU.PA EL.PA ASML.AS PRX.AS)},
-      %{name: "Japan Exchange (Tokyo)", country: "Japan", flag: "🇯🇵", currency: "JPY",
-        tickers: ~w(7203.T 8306.T 6758.T 9984.T 6861.T 9983.T 8035.T 6098.T 4063.T 9432.T)},
-      %{name: "Shenzhen Stock Exchange", country: "China", flag: "🇨🇳", currency: "CNY",
-        tickers: ~w(300750.SZ 000858.SZ 002594.SZ 000333.SZ 300760.SZ 000651.SZ 002415.SZ 000001.SZ 002230.SZ 300059.SZ)},
-      %{name: "National Stock Exchange of India", country: "India", flag: "🇮🇳", currency: "INR",
-        tickers: ~w(RELIANCE.NS TCS.NS HDFCBANK.NS BHARTIARTL.NS ICICIBANK.NS INFY.NS SBIN.NS LT.NS ITC.NS HINDUNILVR.NS)},
-      %{name: "Hong Kong Stock Exchange", country: "Hong Kong", flag: "🇭🇰", currency: "HKD",
-        tickers: ~w(0700.HK 0941.HK 1299.HK 0939.HK 1398.HK 3690.HK 9988.HK 0388.HK 2318.HK 0005.HK)},
-      %{name: "Toronto Stock Exchange", country: "Canada", flag: "🇨🇦", currency: "CAD",
-        tickers: ~w(RY.TO TD.TO SHOP.TO ENB.TO BN.TO CNR.TO CP.TO BMO.TO CNQ.TO BNS.TO)},
-      %{name: "Saudi Exchange (Tadawul)", country: "Saudi Arabia", flag: "🇸🇦", currency: "SAR",
-        tickers: ~w(2222.SR 1120.SR 2010.SR 7010.SR 1180.SR 2350.SR 1211.SR 7020.SR 1010.SR 2020.SR)}
+      %{id: "nasdaq", name: "NASDAQ", country: "United States", flag: "🇺🇸", suffix: "", tickers: nasdaq()},
+      %{id: "nyse", name: "NYSE", country: "United States", flag: "🇺🇸", suffix: "", tickers: nyse()},
+      %{id: "euronext", name: "Euronext", country: "European Union", flag: "🇪🇺", suffix: :euronext, tickers: euronext()},
+      %{id: "shanghai", name: "Shanghai (SSE)", country: "China", flag: "🇨🇳", suffix: ".SS", tickers: shanghai()},
+      %{id: "tokyo", name: "Tokyo (JPX)", country: "Japan", flag: "🇯🇵", suffix: ".T", tickers: tokyo()},
+      %{id: "india", name: "NSE India", country: "India", flag: "🇮🇳", suffix: ".NS", tickers: india()},
+      %{id: "shenzhen", name: "Shenzhen (SZSE)", country: "China", flag: "🇨🇳", suffix: ".SZ", tickers: shenzhen()},
+      %{id: "hongkong", name: "Hong Kong (HKEX)", country: "Hong Kong", flag: "🇭🇰", suffix: ".HK", tickers: hongkong()},
+      %{id: "toronto", name: "Toronto (TSX)", country: "Canada", flag: "🇨🇦", suffix: ".TO", tickers: toronto()},
+      %{id: "saudi", name: "Tadawul", country: "Saudi Arabia", flag: "🇸🇦", suffix: ".SR", tickers: saudi()},
+      %{id: "taiwan", name: "Taiwan (TWSE)", country: "Taiwan", flag: "🇹🇼", suffix: ".TW", tickers: taiwan()}
     ]
   end
 
-  # Common name + shares outstanding (billions) per ticker. Shares change
-  # slowly; live price x these gives a market cap good enough to rank by, and
-  # is the fallback whenever the exact quote endpoint is unreachable.
-  def meta do
-    %{
-      "BRK-B" => {"Berkshire Hathaway", 2.16}, "JPM" => {"JPMorgan Chase", 2.78},
-      "WMT" => {"Walmart", 8.03}, "V" => {"Visa", 1.94}, "JNJ" => {"Johnson & Johnson", 2.41},
-      "XOM" => {"Exxon Mobil", 4.34}, "PG" => {"Procter & Gamble", 2.35}, "HD" => {"Home Depot", 0.995},
-      "BAC" => {"Bank of America", 7.6}, "KO" => {"Coca-Cola", 4.31},
-      "AAPL" => {"Apple", 14.84}, "MSFT" => {"Microsoft", 7.43}, "NVDA" => {"NVIDIA", 24.4},
-      "GOOGL" => {"Alphabet", 12.2}, "AMZN" => {"Amazon", 10.6}, "META" => {"Meta Platforms", 2.52},
-      "TSLA" => {"Tesla", 3.22}, "AVGO" => {"Broadcom", 4.7}, "COST" => {"Costco", 0.443},
-      "NFLX" => {"Netflix", 0.426},
-      "MC.PA" => {"LVMH", 0.5}, "RMS.PA" => {"Hermès", 0.105}, "OR.PA" => {"L'Oréal", 0.535},
-      "TTE.PA" => {"TotalEnergies", 2.34}, "SAN.PA" => {"Sanofi", 1.25}, "AIR.PA" => {"Airbus", 0.79},
-      "SU.PA" => {"Schneider Electric", 0.566}, "EL.PA" => {"EssilorLuxottica", 0.458},
-      "ASML.AS" => {"ASML", 0.393}, "PRX.AS" => {"Prosus", 2.46},
-      "7203.T" => {"Toyota Motor", 13.0}, "8306.T" => {"Mitsubishi UFJ", 11.8},
-      "6758.T" => {"Sony Group", 6.15}, "9984.T" => {"SoftBank Group", 1.44},
-      "6861.T" => {"Keyence", 0.243}, "9983.T" => {"Fast Retailing", 0.318},
-      "8035.T" => {"Tokyo Electron", 0.466}, "6098.T" => {"Recruit Holdings", 1.5},
-      "4063.T" => {"Shin-Etsu Chemical", 1.94}, "9432.T" => {"NTT", 9.06},
-      "600519.SS" => {"Kweichow Moutai", 1.26}, "601398.SS" => {"ICBC", 356.0},
-      "601857.SS" => {"PetroChina", 183.0}, "600941.SS" => {"China Mobile", 21.5},
-      "601288.SS" => {"Agricultural Bank of China", 350.0}, "601988.SS" => {"Bank of China", 294.0},
-      "600036.SS" => {"China Merchants Bank", 25.2}, "601628.SS" => {"China Life Insurance", 28.3},
-      "600900.SS" => {"China Yangtze Power", 24.5}, "601318.SS" => {"Ping An Insurance", 18.2},
-      "300750.SZ" => {"CATL", 4.4}, "000858.SZ" => {"Wuliangye Yibin", 3.88},
-      "002594.SZ" => {"BYD", 2.91}, "000333.SZ" => {"Midea Group", 7.0},
-      "300760.SZ" => {"Mindray", 1.21}, "000651.SZ" => {"Gree Electric", 5.6},
-      "002415.SZ" => {"Hikvision", 9.2}, "000001.SZ" => {"Ping An Bank", 19.4},
-      "002230.SZ" => {"iFlytek", 2.31}, "300059.SZ" => {"East Money", 15.8},
-      "RELIANCE.NS" => {"Reliance Industries", 13.5}, "TCS.NS" => {"Tata Consultancy Services", 3.62},
-      "HDFCBANK.NS" => {"HDFC Bank", 7.65}, "BHARTIARTL.NS" => {"Bharti Airtel", 5.98},
-      "ICICIBANK.NS" => {"ICICI Bank", 7.06}, "INFY.NS" => {"Infosys", 4.15},
-      "SBIN.NS" => {"State Bank of India", 8.92}, "LT.NS" => {"Larsen & Toubro", 1.375},
-      "ITC.NS" => {"ITC", 12.5}, "HINDUNILVR.NS" => {"Hindustan Unilever", 2.35},
-      "0700.HK" => {"Tencent", 9.13}, "0941.HK" => {"China Mobile", 21.5},
-      "1299.HK" => {"AIA Group", 11.4}, "0939.HK" => {"China Construction Bank", 250.0},
-      "1398.HK" => {"ICBC", 356.0}, "3690.HK" => {"Meituan", 6.12}, "9988.HK" => {"Alibaba", 19.0},
-      "0388.HK" => {"HKEX", 1.27}, "2318.HK" => {"Ping An Insurance", 18.2}, "0005.HK" => {"HSBC Holdings", 17.6},
-      "RY.TO" => {"Royal Bank of Canada", 1.41}, "TD.TO" => {"Toronto-Dominion Bank", 1.75},
-      "SHOP.TO" => {"Shopify", 1.29}, "ENB.TO" => {"Enbridge", 2.18}, "BN.TO" => {"Brookfield", 1.64},
-      "CNR.TO" => {"Canadian National Railway", 0.625}, "CP.TO" => {"Canadian Pacific Kansas City", 0.93},
-      "BMO.TO" => {"Bank of Montreal", 0.73}, "CNQ.TO" => {"Canadian Natural Resources", 2.1},
-      "BNS.TO" => {"Bank of Nova Scotia", 1.24},
-      "2222.SR" => {"Saudi Aramco", 242.0}, "1120.SR" => {"Al Rajhi Bank", 4.0},
-      "2010.SR" => {"SABIC", 3.0}, "7010.SR" => {"STC", 5.0}, "1180.SR" => {"Saudi National Bank", 5.98},
-      "2350.SR" => {"Saudi Kayan", 1.5}, "1211.SR" => {"Maaden", 3.78},
-      "7020.SR" => {"Etihad Etisalat (Mobily)", 0.77}, "1010.SR" => {"Riyad Bank", 3.0},
-      "2020.SR" => {"SABIC Agri-Nutrients", 0.476}
-    }
-  end
+  # ---- Candidate ticker universes (a superset; live data does the ranking) --
 
-  # ---- Data fetching -------------------------------------------------------
+  defp nasdaq, do: ~w(NVDA AAPL MSFT GOOGL GOOG AMZN META AVGO TSLA NFLX COST PLTR ASML AMD CSCO PEP AZN TMUS LIN INTU QCOM TXN ISRG BKNG AMGN AMAT PDD ADBE HON GILD MU PANW ADP LRCX VRTX KLAC SBUX MELI INTC CRWD CMCSA CEG ADI MDLZ REGN APP PYPL SNPS CDNS MRVL FTNT ABNB WDAY CSX ORLY ADSK ROP NXPI CHTR AEP PCAR MNST PAYX CPRT KDP ROST DASH MAR FAST ODFL TTD EA VRSK CTAS DDOG XEL LULU EXC KHC CCEP GEHC IDXX TEAM BKR FANG MCHP CSGP DXCM AXON ZS WBD ANSS TTWO GFS ON CDW BIIB ILMN MDB WTW GEN NTAP FCNCA TER CTSH HOOD COIN SMCI ARM DLTR VRSN)
 
-  # FX rate: 1 unit of `cur` -> USD, via Yahoo chart "<CUR>USD=X".
-  def fx_rate("USD"), do: 1.0
-  def fx_rate(cur) do
-    case chart("#{cur}USD=X") do
-      {:ok, price, _prev} when is_number(price) and price > 0 -> price
-      _ -> nil
+  defp nyse, do: ~w(BRK-B LLY WMT JPM V ORCL MA XOM UNH JNJ HD PG ABBV BAC CVX KO GE WFC CRM PM IBM UNP MS ABT GS MCD DIS AXP RTX CAT T MRK VZ NOW BX SCHW C PFE BLK SPGI BA WM TMO NEE LOW DE ELV COP BSX SYK UBER TJX MMC CB PGR MDT BMY CI DHR NKE SO DUK MO PNC CL ICE USB WELL APH CME GD ITW TT MCK EQIX CVS MMM COF EMR AON ZTS NOC FCX APD ECL GM LMT WMB PH CARR MSI BDX FDX SHW NSC SLB HCA D EOG TGT AJG MET TFC)
+
+  defp euronext, do: ~w(MC.PA ASML.AS RMS.PA OR.PA TTE.PA PRX.AS SU.PA SAN.PA AIR.PA RACE.MI EL.PA AI.PA ENEL.MI DSY.PA ISP.MI CDI.PA ABI.BR BNP.PA INGA.AS EQNR.OL ENI.MI UCG.MI CS.PA SAF.PA DG.PA ADYEN.AS WKL.AS STLAM.MI KER.PA BN.PA DSFIR.AS EN.PA SGO.PA RI.PA GLE.PA PHIA.AS ACA.PA HEIA.AS G.MI BESI.AS LR.PA PUB.PA VIE.PA KBC.BR GBLB.BR MT.AS TEN.MI NEXI.MI ML.PA AKRBP.OL DNB.OL TEL.OL YAR.OL NHY.OL MOWI.OL CAP.PA STMPA.PA EDP.LS GALP.LS JMT.LS EDPR.LS NK.PA HO.PA RNO.PA ENGI.PA ORA.PA CA.PA GTT.PA EDEN.PA TEP.PA AC.PA SW.PA VIV.PA ERF.PA AMUN.PA SK.PA FR.PA AKE.PA ALO.PA UMG.AS AD.AS AGN.AS ASM.AS NN.AS AKZA.AS RAND.AS KPN.AS IMCD.AS SOLB.BR UCB.BR UMI.BR COLR.BR PROX.BR LOTB.BR AGS.BR SOF.BR WDP.BR ORK.OL SALM.OL KOG.OL GJF.OL TGS.OL SUBC.OL LDO.MI PST.MI PIRC.MI MB.MI BMED.MI REC.MI)
+
+  defp shanghai, do: ~w(600519.SS 601398.SS 601288.SS 601939.SS 601857.SS 600941.SS 601988.SS 600036.SS 601628.SS 600900.SS 601318.SS 603288.SS 600276.SS 688981.SS 601888.SS 600030.SS 601166.SS 600028.SS 601088.SS 601658.SS 600887.SS 600809.SS 601012.SS 601668.SS 601816.SS 600438.SS 601138.SS 600406.SS 688041.SS 601225.SS 600585.SS 601633.SS 600690.SS 601728.SS 600050.SS 601601.SS 600031.SS 601919.SS 600104.SS 688111.SS 601066.SS 600436.SS 601985.SS 600089.SS 601390.SS 601186.SS 600196.SS 601800.SS 600309.SS 688012.SS 600009.SS 601995.SS 600600.SS 601877.SS 600346.SS 600905.SS 688256.SS 601169.SS 601211.SS 600848.SS 601618.SS 600999.SS 600183.SS 603259.SS 600745.SS 600588.SS 601336.SS 601111.SS 600150.SS 600426.SS 601319.SS 600547.SS 600188.SS 601898.SS 600795.SS 601229.SS 688599.SS 688008.SS 600025.SS 603501.SS 600518.SS 601377.SS 600660.SS 600754.SS 600570.SS 600352.SS 601865.SS 688036.SS 601989.SS 600061.SS 600886.SS 601021.SS 600015.SS 600016.SS 600837.SS 601881.SS 600340.SS 600018.SS 600011.SS 600219.SS 688561.SS 603986.SS 688271.SS 600875.SS 601238.SS 600362.SS)
+
+  defp tokyo, do: ~w(7203.T 8306.T 6861.T 6758.T 9984.T 9983.T 8035.T 6098.T 9432.T 7974.T 8316.T 4063.T 9433.T 8058.T 6501.T 6902.T 8001.T 4502.T 8766.T 8031.T 7741.T 6594.T 6367.T 4519.T 7267.T 8411.T 6981.T 6273.T 4568.T 8053.T 7011.T 6857.T 4661.T 9434.T 6503.T 4543.T 7751.T 8002.T 6752.T 6954.T 4578.T 8801.T 6701.T 7269.T 4901.T 8267.T 9020.T 5108.T 8750.T 8591.T 7182.T 4503.T 6920.T 6146.T 6326.T 8802.T 6178.T 7733.T 6645.T 4452.T 2914.T 9022.T 5401.T 7201.T 7270.T 6502.T 6753.T 7832.T 4689.T 4307.T 8604.T 9613.T 3382.T 4684.T 4612.T 2802.T 6479.T 8630.T 8725.T 9101.T 5802.T 6504.T 7012.T 6723.T 6201.T 6471.T 5020.T 1605.T 9501.T 9531.T 9503.T 4188.T 4523.T 4528.T 3402.T 5713.T 2502.T 2503.T 4911.T 8113.T 9735.T 9202.T 9021.T 8830.T 7259.T 6963.T 6762.T 4151.T 9766.T)
+
+  defp india, do: ~w(RELIANCE.NS HDFCBANK.NS TCS.NS BHARTIARTL.NS ICICIBANK.NS SBIN.NS INFY.NS LICI.NS BAJFINANCE.NS HINDUNILVR.NS ITC.NS LT.NS HCLTECH.NS KOTAKBANK.NS SUNPHARMA.NS MARUTI.NS AXISBANK.NS M&M.NS ULTRACEMCO.NS NTPC.NS BAJAJFINSV.NS TITAN.NS ONGC.NS ADANIENT.NS POWERGRID.NS ADANIPORTS.NS WIPRO.NS COALINDIA.NS BAJAJ-AUTO.NS NESTLEIND.NS ASIANPAINT.NS JSWSTEEL.NS TATAMOTORS.NS DMART.NS ADANIGREEN.NS ADANIPOWER.NS TATASTEEL.NS HINDZINC.NS HAL.NS TRENT.NS SIEMENS.NS VBL.NS BEL.NS ETERNAL.NS GRASIM.NS DLF.NS IOC.NS PIDILITIND.NS VEDL.NS INDIGO.NS DIVISLAB.NS BANKBARODA.NS AMBUJACEM.NS PNB.NS BPCL.NS GODREJCP.NS CIPLA.NS BRITANNIA.NS TVSMOTOR.NS EICHERMOT.NS HDFCLIFE.NS TATAPOWER.NS DRREDDY.NS SHRIRAMFIN.NS GAIL.NS LODHA.NS HAVELLS.NS TECHM.NS SBILIFE.NS MOTHERSON.NS TORNTPHARM.NS CHOLAFIN.NS JIOFIN.NS CGPOWER.NS DABUR.NS ZYDUSLIFE.NS MAXHEALTH.NS HEROMOTOCO.NS INDUSINDBK.NS BAJAJHLDNG.NS NAUKRI.NS BOSCHLTD.NS JSWENERGY.NS MANKIND.NS ICICIPRULI.NS UNITDSPR.NS CANBK.NS POLYCAB.NS INDHOTEL.NS SOLARINDS.NS ABB.NS SHREECEM.NS LTIM.NS GICRE.NS PFC.NS RECLTD.NS SWIGGY.NS NHPC.NS ICICIGI.NS TORNTPOWER.NS OFSS.NS BAJAJHFL.NS AUROPHARMA.NS BHEL.NS COLPAL.NS MUTHOOTFIN.NS LUPIN.NS NMDC.NS IRFC.NS PERSISTENT.NS MARICO.NS UNIONBANK.NS SUZLON.NS)
+
+  defp shenzhen, do: ~w(300750.SZ 002594.SZ 000858.SZ 000333.SZ 300760.SZ 002475.SZ 000651.SZ 002415.SZ 000001.SZ 300059.SZ 002714.SZ 000568.SZ 002230.SZ 300124.SZ 000725.SZ 002241.SZ 300498.SZ 002304.SZ 000063.SZ 300274.SZ 002027.SZ 000338.SZ 002352.SZ 300015.SZ 002460.SZ 300014.SZ 002142.SZ 000538.SZ 002129.SZ 002311.SZ 300782.SZ 300450.SZ 002271.SZ 002050.SZ 000776.SZ 300033.SZ 002493.SZ 000625.SZ 300979.SZ 000792.SZ 002466.SZ 300661.SZ 000895.SZ 002624.SZ 002601.SZ 000938.SZ 002179.SZ 300751.SZ 300316.SZ 002709.SZ 300408.SZ 002648.SZ 000661.SZ 000100.SZ 002812.SZ 300346.SZ 002736.SZ 000166.SZ 300999.SZ 002384.SZ 300628.SZ 002920.SZ 300888.SZ 002074.SZ 300433.SZ 002032.SZ 300457.SZ 002916.SZ 300759.SZ 000596.SZ 002602.SZ 000877.SZ 002841.SZ 000301.SZ 002180.SZ 300677.SZ 300866.SZ 000999.SZ 002603.SZ 300253.SZ 300919.SZ 000708.SZ 002138.SZ 300223.SZ 002056.SZ 002508.SZ 002120.SZ 002353.SZ 300012.SZ 002340.SZ 002409.SZ 000423.SZ 300896.SZ 002007.SZ 300454.SZ 000768.SZ 002507.SZ 002013.SZ 000060.SZ 300630.SZ 002558.SZ 002572.SZ 000876.SZ 002146.SZ 300296.SZ 300413.SZ 300142.SZ 002405.SZ 000951.SZ)
+
+  defp hongkong, do: ~w(0700.HK 9988.HK 1398.HK 0939.HK 0941.HK 1299.HK 3690.HK 0388.HK 3988.HK 1810.HK 2318.HK 0883.HK 1211.HK 0005.HK 9618.HK 0857.HK 0386.HK 2628.HK 1024.HK 2020.HK 0688.HK 3968.HK 0001.HK 0016.HK 0002.HK 0011.HK 0762.HK 0728.HK 2382.HK 2331.HK 6862.HK 9999.HK 9888.HK 9961.HK 2269.HK 1093.HK 1177.HK 6618.HK 6098.HK 2007.HK 0027.HK 0288.HK 0291.HK 0322.HK 0151.HK 2313.HK 1928.HK 0003.HK 0006.HK 0012.HK 0017.HK 0066.HK 0083.HK 0101.HK 0823.HK 1109.HK 1113.HK 0960.HK 2899.HK 3328.HK 1288.HK 6030.HK 6837.HK 1336.HK 2601.HK 0998.HK 1658.HK 0916.HK 0836.HK 0902.HK 1088.HK 1171.HK 0489.HK 0175.HK 2238.HK 2333.HK 9868.HK 2015.HK 9866.HK 0285.HK 0992.HK 0981.HK 1347.HK 0241.HK 1801.HK 2359.HK 6160.HK 1099.HK 0867.HK 2196.HK 1972.HK 0019.HK 1929.HK 3692.HK 2380.HK 0267.HK 1378.HK 0358.HK 1772.HK 3331.HK 0669.HK 9626.HK)
+
+  defp toronto, do: ~w(RY.TO SHOP.TO TD.TO BN.TO ENB.TO AEM.TO CNR.TO BMO.TO CM.TO CP.TO BAM.TO CNQ.TO TRI.TO BNS.TO ATD.TO SU.TO TRP.TO MFC.TO BNRE.TO WCN.TO FNV.TO ABX.TO L.TO FTS.TO T.TO NTR.TO WPM.TO CSU.TO GIB-A.TO SLF.TO IFC.TO PPL.TO DOL.TO IMO.TO BCE.TO GWO.TO POW.TO NA.TO K.TO MRU.TO CVE.TO H.TO QSR.TO TECK-B.TO GFL.TO FM.TO MG.TO CCO.TO EMA.TO WN.TO OTEX.TO SAP.TO RCI-B.TO GIL.TO TOU.TO FFH.TO AQN.TO STN.TO WSP.TO DSG.TO PAAS.TO TIH.TO CTC-A.TO X.TO BIP-UN.TO BEP-UN.TO AC.TO CAE.TO CIGI.TO EFN.TO ARX.TO NGT.TO FSV.TO WFG.TO IVN.TO CCL-B.TO TFII.TO LUN.TO AGI.TO EQB.TO ONEX.TO DPM.TO EMP-A.TO BTO.TO CPX.TO BLX.TO PSK.TO KEY.TO NPI.TO OGC.TO SSRM.TO LNR.TO MEG.TO ERO.TO TPZ.TO PXT.TO BYD.TO ATZ.TO WDO.TO SES.TO CG.TO IGM.TO GRT-UN.TO REI-UN.TO CAR-UN.TO FCR-UN.TO CSH-UN.TO DOO.TO CLS.TO PRMW.TO HBM.TO WCP.TO VRN.TO)
+
+  defp saudi, do: ~w(2222.SR 1120.SR 7010.SR 1180.SR 2010.SR 1150.SR 1010.SR 1060.SR 1211.SR 2280.SR 1020.SR 1030.SR 1050.SR 7020.SR 4002.SR 4013.SR 2020.SR 2350.SR 2380.SR 4190.SR 4030.SR 4001.SR 2310.SR 5110.SR 1080.SR 2290.SR 2001.SR 2330.SR 2060.SR 2040.SR 2050.SR 2270.SR 6001.SR 6010.SR 6004.SR 4003.SR 4008.SR 4050.SR 4061.SR 4240.SR 4031.SR 4040.SR 4200.SR 4280.SR 4321.SR 4338.SR 7200.SR 7203.SR 7202.SR 7204.SR 2082.SR 5120.SR 1182.SR 1183.SR 8210.SR 8010.SR 8012.SR 4142.SR 1212.SR 1214.SR 1320.SR 1301.SR 1304.SR 3010.SR 3020.SR 3030.SR 3040.SR 3050.SR 3060.SR 3080.SR 3090.SR 3091.SR 3001.SR 3002.SR 3003.SR 3004.SR 3005.SR 4250.SR 4300.SR 4020.SR 4090.SR 4100.SR 4150.SR 4220.SR 4160.SR 2080.SR 2081.SR 2110.SR 2130.SR 2150.SR 2160.SR 2180.SR 2370.SR)
+
+  defp taiwan, do: ~w(2330.TW 2317.TW 2454.TW 2308.TW 2382.TW 2891.TW 2412.TW 2881.TW 2882.TW 3711.TW 2303.TW 2886.TW 2884.TW 3045.TW 2357.TW 2885.TW 2880.TW 2892.TW 5880.TW 2883.TW 2887.TW 3008.TW 2002.TW 1303.TW 1301.TW 2395.TW 2890.TW 6505.TW 1216.TW 2207.TW 2603.TW 2327.TW 3034.TW 2379.TW 3231.TW 2345.TW 4938.TW 2912.TW 1326.TW 3037.TW 2301.TW 2409.TW 2474.TW 2376.TW 3661.TW 3017.TW 3702.TW 2354.TW 2356.TW 6669.TW 1101.TW 1102.TW 2618.TW 2610.TW 2615.TW 2609.TW 2888.TW 2889.TW 5871.TW 5876.TW 2801.TW 2809.TW 2823.TW 2834.TW 2105.TW 9910.TW 9904.TW 1402.TW 1476.TW 1590.TW 2049.TW 2360.TW 2377.TW 2383.TW 2451.TW 2458.TW 3023.TW 3035.TW 3036.TW 3443.TW 3533.TW 3653.TW 4904.TW 4958.TW 6415.TW 6446.TW 6488.TW 8046.TW 8454.TW 9921.TW 9945.TW 1227.TW 1210.TW 1229.TW 2106.TW 2371.TW 2353.TW 2347.TW 2352.TW 6239.TW 6147.TW 3532.TW 3406.TW 5269.TW 5347.TW 1605.TW 1609.TW 2204.TW 9914.TW 2027.TW)
+
+  # ---- Ticker filtering ----------------------------------------------------
+
+  defp valid_ticker?(t, ""), do: not String.contains?(t, ".")
+  defp valid_ticker?(t, :euronext), do: String.ends_with?(t, @euronext_suffixes)
+  defp valid_ticker?(t, suffix), do: String.ends_with?(t, suffix)
+
+  # ---- Yahoo data fetching -------------------------------------------------
+
+  def fetch_quotes(tickers) do
+    case crumb_handshake() do
+      {:ok, crumb, cookies} ->
+        tickers
+        |> Enum.chunk_every(50)
+        |> Enum.with_index()
+        |> Enum.flat_map(fn {batch, i} ->
+          if i > 0, do: Process.sleep(150)
+          quote_batch(batch, crumb, cookies)
+        end)
+        |> Map.new()
+
+      :error ->
+        IO.puts("  ! crumb handshake failed — no market-cap data available")
+        %{}
     end
   end
 
-  # Yahoo v8 chart endpoint -> {:ok, last_price, previous_close} | :error
-  def chart(symbol) do
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/#{URI.encode(symbol)}"
+  defp quote_batch(batch, crumb, cookies) do
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
 
     case Req.get(url,
-           params: [interval: "1d", range: "5d"],
-           headers: [{"user-agent", @user_agent}],
-           retry: :transient, max_retries: 3, receive_timeout: 20_000
+           params: [symbols: Enum.join(batch, ","), crumb: crumb],
+           headers: [{"user-agent", @ua}, {"cookie", cookies}],
+           retry: :transient, max_retries: 3, receive_timeout: 25_000
          ) do
-      {:ok, %{status: 200, body: %{"chart" => %{"result" => [r | _]}}}} ->
-        meta = r["meta"] || %{}
-        price = meta["regularMarketPrice"]
-        prev = meta["chartPreviousClose"] || meta["previousClose"]
-        if is_number(price), do: {:ok, price * 1.0, num(prev)}, else: :error
+      {:ok, %{status: 200, body: %{"quoteResponse" => %{"result" => results}}}} ->
+        for q <- results, is_number(q["marketCap"]) and q["marketCap"] > 0, is_number(q["regularMarketPrice"]) do
+          {q["symbol"],
+           %{
+             price: q["regularMarketPrice"] * 1.0,
+             mcap: q["marketCap"] * 1.0,
+             change: numf(q["regularMarketChangePercent"]),
+             currency: q["currency"] || "USD",
+             name: q["longName"] || q["shortName"] || q["symbol"]
+           }}
+        end
 
       _ ->
-        :error
-    end
-  end
-
-  defp num(n) when is_number(n), do: n * 1.0
-  defp num(_), do: nil
-
-  # Optional exact market caps (local currency) keyed by ticker, via the v7
-  # quote endpoint with a cookie+crumb handshake. Returns %{} if unreachable.
-  def exact_market_caps(tickers) do
-    with {:ok, crumb, cookies} <- crumb_handshake() do
-      tickers
-      |> Enum.chunk_every(40)
-      |> Enum.flat_map(fn batch ->
-        url = "https://query1.finance.yahoo.com/v7/finance/quote"
-
-        case Req.get(url,
-               params: [symbols: Enum.join(batch, ","), crumb: crumb],
-               headers: [{"user-agent", @user_agent}, {"cookie", cookies}],
-               receive_timeout: 20_000
-             ) do
-          {:ok, %{status: 200, body: %{"quoteResponse" => %{"result" => results}}}} ->
-            for q <- results, is_number(q["marketCap"]), do: {q["symbol"], q["marketCap"] * 1.0}
-
-          _ ->
-            []
-        end
-      end)
-      |> Map.new()
-    else
-      _ -> %{}
+        []
     end
   end
 
   defp crumb_handshake do
     with {:ok, resp} <-
-           Req.get("https://fc.yahoo.com/",
-             headers: [{"user-agent", @user_agent}], redirect: false, receive_timeout: 15_000
-           ),
+           Req.get("https://fc.yahoo.com/", headers: [{"user-agent", @ua}], redirect: false, receive_timeout: 15_000),
          cookies when cookies != "" <- collect_cookies(resp),
          {:ok, %{status: 200, body: crumb}} when is_binary(crumb) and crumb != "" <-
            Req.get("https://query1.finance.yahoo.com/v1/test/getcrumb",
-             headers: [{"user-agent", @user_agent}, {"cookie", cookies}], receive_timeout: 15_000
+             headers: [{"user-agent", @ua}, {"cookie", cookies}], receive_timeout: 15_000
            ) do
       {:ok, String.trim(crumb), cookies}
     else
@@ -187,158 +134,242 @@ defmodule Stonk do
     |> Enum.join("; ")
   end
 
+  # FX: 1 unit of `cur` -> USD via the chart endpoint (no crumb needed).
+  def fx_rate("USD"), do: 1.0
+  def fx_rate(cur) do
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/#{cur}USD=X"
+
+    case Req.get(url, params: [interval: "1d", range: "5d"], headers: [{"user-agent", @ua}],
+           retry: :transient, max_retries: 3, receive_timeout: 20_000) do
+      {:ok, %{status: 200, body: %{"chart" => %{"result" => [r | _]}}}} ->
+        numf(get_in(r, ["meta", "regularMarketPrice"]))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp numf(n) when is_number(n), do: n * 1.0
+  defp numf(_), do: nil
+
   # ---- Assembly ------------------------------------------------------------
 
   def build do
-    IO.puts("stonkgecko: fetching market data...")
-    fmp_key = System.get_env("FMP_API_KEY")
-    all_tickers = markets() |> Enum.flat_map(& &1.tickers)
+    IO.puts("stonkgecko: building...")
 
-    currencies = markets() |> Enum.map(& &1.currency) |> Enum.uniq()
+    # Filter + uniq per market, then dedup globally so each Yahoo symbol is
+    # assigned to a single market (first occurrence wins).
+    {prepared, _} =
+      Enum.map_reduce(markets(), MapSet.new(), fn m, seen ->
+        tickers =
+          m.tickers
+          |> Enum.filter(&valid_ticker?(&1, m.suffix))
+          |> Enum.uniq()
+          |> Enum.reject(&MapSet.member?(seen, &1))
+
+        {Map.put(m, :tickers, tickers), MapSet.union(seen, MapSet.new(tickers))}
+      end)
+
+    all = Enum.flat_map(prepared, & &1.tickers)
+    IO.puts("  candidates: #{length(all)} tickers across #{length(prepared)} markets")
+
+    quotes = fetch_quotes(all)
+    IO.puts("  quotes returned: #{map_size(quotes)}")
+
+    currencies = quotes |> Map.values() |> Enum.map(& &1.currency) |> Enum.uniq()
     fx = Map.new(currencies, fn c -> {c, fx_rate(c)} end)
-    IO.puts("  fx rates: #{inspect(fx)}")
-
-    exact = exact_market_caps(all_tickers)
-    fmp = if fmp_key, do: fmp_quotes(all_tickers, fmp_key), else: %{}
-    IO.puts("  exact market caps (yahoo): #{map_size(exact)} | fmp: #{map_size(fmp)}")
+    IO.puts("  fx: #{inspect(fx)}")
 
     markets_data =
-      Enum.map(markets(), fn m ->
-        rate = Map.get(fx, m.currency) || 1.0
-
+      Enum.map(prepared, fn m ->
         rows =
           m.tickers
-          |> Enum.map(&row(&1, m.currency, rate, exact, fmp))
+          |> Enum.map(fn t -> build_row(t, quotes[t], fx, m) end)
           |> Enum.reject(&is_nil/1)
           |> Enum.sort_by(& &1.mcap_usd, :desc)
-          |> Enum.with_index(1)
-          |> Enum.map(fn {row, rank} -> Map.put(row, :rank, rank) end)
+          |> Enum.take(100)
+          |> rank()
 
         Map.put(m, :rows, rows)
       end)
 
-    total = markets_data |> Enum.flat_map(& &1.rows) |> Enum.map(& &1.mcap_usd) |> Enum.sum()
-    counted = markets_data |> Enum.flat_map(& &1.rows) |> length()
-    IO.puts("  priced #{counted} stocks, total market cap $#{Render.human_usd(total)}")
+    global =
+      markets_data
+      |> Enum.flat_map(& &1.rows)
+      |> Enum.sort_by(& &1.mcap_usd, :desc)
+      |> Enum.take(100)
+      |> rank()
 
-    html = Render.page(markets_data, total)
+    total = global |> Enum.map(& &1.mcap_usd) |> Enum.sum()
+    tracked = markets_data |> Enum.flat_map(& &1.rows) |> length()
+    IO.puts("  ranked #{tracked} stocks; global #1 = #{(List.first(global) || %{name: "—"}).name}")
+
+    html = Render.page(markets_data, global, tracked, total)
     File.mkdir_p!("public")
     File.write!("public/index.html", html)
+    File.write!("public/favicon.svg", Render.gecko_svg(true))
     File.write!("public/.nojekyll", "")
     File.write!("public/CNAME", "stonkgecko.com")
     IO.puts("stonkgecko: wrote public/index.html (#{byte_size(html)} bytes)")
   end
 
-  defp row(ticker, currency, rate, exact, fmp) do
-    {name, shares_b} = Map.get(meta(), ticker, {ticker, nil})
+  defp build_row(_t, nil, _fx, _m), do: nil
+  defp build_row(t, q, fx, m) do
+    rate = Map.get(fx, q.currency) || 1.0
 
-    case chart(ticker) do
-      {:ok, price, prev} ->
-        change =
-          if is_number(prev) and prev > 0, do: (price - prev) / prev * 100.0, else: nil
-
-        mcap_local =
-          cond do
-            is_number(fmp[ticker]) -> fmp[ticker]
-            is_number(exact[ticker]) -> exact[ticker]
-            is_number(shares_b) -> price * shares_b * 1.0e9
-            true -> nil
-          end
-
-        if is_number(mcap_local) do
-          %{ticker: ticker, name: name, currency: currency, price: price,
-            change: change, mcap_usd: mcap_local * rate}
-        end
-
-      :error ->
-        IO.puts("  ! no price for #{ticker}")
-        nil
-    end
+    %{
+      ticker: t,
+      name: q.name,
+      flag: m.flag,
+      market: m.name,
+      currency: q.currency,
+      price: q.price,
+      change: q.change,
+      mcap_usd: q.mcap * rate
+    }
   end
 
-  # Financial Modeling Prep batched quote (only used if FMP_API_KEY is set).
-  defp fmp_quotes(tickers, key) do
-    url = "https://financialmodelingprep.com/api/v3/quote/#{Enum.join(tickers, ",")}"
-
-    case Req.get(url, params: [apikey: key], receive_timeout: 20_000) do
-      {:ok, %{status: 200, body: results}} when is_list(results) ->
-        for q <- results, is_number(q["marketCap"]), do: {q["symbol"], q["marketCap"] * 1.0}
-      _ -> []
-    end
-    |> Map.new()
-  end
+  defp rank(rows), do: rows |> Enum.with_index(1) |> Enum.map(fn {r, i} -> Map.put(r, :rank, i) end)
 end
 
 defmodule Render do
+  # ---- Formatting ----------------------------------------------------------
+
   def human_usd(n) when not is_number(n), do: "—"
   def human_usd(n) when n >= 1.0e12, do: "$#{f(n / 1.0e12)}T"
   def human_usd(n) when n >= 1.0e9, do: "$#{f(n / 1.0e9)}B"
   def human_usd(n) when n >= 1.0e6, do: "$#{f(n / 1.0e6)}M"
   def human_usd(n), do: "$#{f(n)}"
 
-  defp f(x) do
-    :erlang.float_to_binary(x * 1.0, decimals: 2)
-  end
+  defp f(x), do: :erlang.float_to_binary(x * 1.0, decimals: 2)
 
-  def price(p, cur) do
-    sym = %{"USD" => "$", "EUR" => "€", "JPY" => "¥", "CNY" => "¥", "INR" => "₹",
-            "HKD" => "HK$", "CAD" => "C$", "SAR" => "﷼"}
-    "#{Map.get(sym, cur, "")}#{:erlang.float_to_binary(p * 1.0, decimals: 2)}"
-  end
+  @symbols %{"USD" => "$", "EUR" => "€", "JPY" => "¥", "CNY" => "¥", "HKD" => "HK$",
+             "INR" => "₹", "CAD" => "C$", "SAR" => "ر.س ", "TWD" => "NT$", "NOK" => "kr ",
+             "GBP" => "£", "GBp" => "p ", "DKK" => "kr ", "CHF" => "Fr ", "SGD" => "S$"}
 
-  def change_badge(nil), do: ~s(<span class="chg flat">—</span>)
+  def price(p, cur), do: "#{Map.get(@symbols, cur, "")}#{:erlang.float_to_binary(p * 1.0, decimals: 2)}"
+
+  def change_badge(nil), do: ~s(<span class="chg flat">·</span>)
   def change_badge(c) do
     cls = if c >= 0, do: "up", else: "down"
     arrow = if c >= 0, do: "▲", else: "▼"
-    val = :erlang.float_to_binary(abs(c) * 1.0, decimals: 2)
-    ~s(<span class="chg #{cls}">#{arrow} #{val}%</span>)
+    ~s(<span class="chg #{cls}">#{arrow} #{:erlang.float_to_binary(abs(c) * 1.0, decimals: 2)}%</span>)
   end
 
-  def e(s), do: s |> to_string() |> String.replace("&", "&amp;") |> String.replace("<", "&lt;") |> String.replace(">", "&gt;")
+  def e(s), do: s |> to_string() |> String.replace("&", "&amp;") |> String.replace("<", "&lt;") |> String.replace(">", "&gt;") |> String.replace("\"", "&quot;")
 
-  def page(markets, total) do
-    stocks = markets |> Enum.flat_map(& &1.rows) |> length()
-    nav =
-      markets
-      |> Enum.with_index(1)
-      |> Enum.map(fn {m, i} -> ~s(<a href="#m#{i}">#{m.flag} #{e(m.name)}</a>) end)
+  # ---- Gecko mascot (also written out as favicon.svg) ----------------------
+
+  def gecko_svg(standalone \\ false) do
+    ns = if standalone, do: ~s( xmlns="http://www.w3.org/2000/svg"), else: ""
+
+    """
+    <svg#{ns} viewBox="0 0 64 64" width="100%" height="100%" role="img" aria-label="stonkgecko">
+      <defs>
+        <linearGradient id="gkbody" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#7af7b0"/><stop offset="1" stop-color="#12b865"/>
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="16" fill="#0a1310"/>
+      <path d="M30 41c-9 3-15-1-16-9-1-7 4-10 8-9" fill="none" stroke="url(#gkbody)" stroke-width="5.5" stroke-linecap="round"/>
+      <path d="M27 43c5 5 13 5 20 0 7-5 8-15 2-21-6-6-17-5-22 2-3 5-2 9 1 13 2 3 1 5-1 7z" fill="url(#gkbody)"/>
+      <g stroke="url(#gkbody)" stroke-width="4.6" stroke-linecap="round">
+        <path d="M29 41l-4 8"/><path d="M45 46l3 8"/><path d="M51 26l9-3"/><path d="M43 17l3-9"/>
+      </g>
+      <circle cx="46" cy="25" r="3.6" fill="#0a1310"/><circle cx="47.3" cy="23.7" r="1.3" fill="#fff"/>
+      <path d="M19 24c0-1 .8-1.8 1.8-1.8" fill="none" stroke="#bff7d6" stroke-width="1.6" stroke-linecap="round" opacity=".5"/>
+    </svg>
+    """
+  end
+
+  defp favicon_data_uri do
+    "data:image/svg+xml;utf8," <> URI.encode(gecko_svg(true) |> String.replace("\n", "") |> String.replace("\"", "'"))
+  end
+
+  # ---- Page ----------------------------------------------------------------
+
+  def page(markets, global, tracked, total) do
+    updated = DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d %H:%M UTC")
+
+    tabs =
+      [{"home", "Home"}, {"global", "Global"}] ++ Enum.map(markets, fn m -> {m.id, m.name} end)
+
+    tabbar =
+      tabs
+      |> Enum.with_index()
+      |> Enum.map(fn {{id, label}, i} ->
+        active = if i == 0, do: " active", else: ""
+        flag = case Enum.find(markets, &(&1.id == id)) do
+          %{flag: fl} -> fl <> " "
+          _ -> if id == "global", do: "🌐 ", else: if(id == "home", do: "🦎 ", else: "")
+        end
+        ~s(<button class="tab#{active}" data-tab="#{id}">#{flag}#{e(label)}</button>)
+      end)
       |> Enum.join("")
 
     sections =
-      markets
-      |> Enum.with_index(1)
-      |> Enum.map(fn {m, i} -> market_section(m, i) end)
+      [home_section(markets), global_section(global)] ++ Enum.map(markets, &market_section/1)
       |> Enum.join("\n")
 
     """
     <!doctype html>
-    <html lang="en">
+    <html lang="en" data-theme="dark">
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>stonkgecko — World Stock Markets by Market Cap</title>
-    <meta name="description" content="Daily-updated ranking of the world's top 10 stock markets and their largest companies by market capitalization.">
+    <title>stonkgecko — World Stock Markets Ranked by Market Cap</title>
+    <meta name="description" content="Track the world's top stock markets and their largest companies ranked by market capitalization. Top 100 stocks per exchange plus a global leaderboard, updated daily.">
+    <meta name="keywords" content="stock market cap, largest companies, NYSE, NASDAQ, Euronext, Tokyo, Shanghai, Shenzhen, Hong Kong, NSE India, Toronto, Tadawul, Taiwan TWSE, stock ranking, market capitalization">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://stonkgecko.com/">
+    <meta name="theme-color" content="#0a1310">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/favicon.svg">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://stonkgecko.com/">
+    <meta property="og:title" content="stonkgecko — World Stock Markets Ranked by Market Cap">
+    <meta property="og:description" content="Top 100 companies per major exchange plus a global market-cap leaderboard. Updated daily.">
+    <meta property="og:image" content="https://stonkgecko.com/favicon.svg">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="stonkgecko — World Stock Markets Ranked by Market Cap">
+    <meta name="twitter:description" content="Top 100 companies per major exchange plus a global market-cap leaderboard.">
+    <meta name="twitter:image" content="https://stonkgecko.com/favicon.svg">
+    <script type="application/ld+json">#{ld_json(tracked, total)}</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <script>(function(){try{var t=localStorage.getItem('sg-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
     <style>#{css()}</style>
     </head>
     <body>
+    <div class="grain"></div>
     <header class="topbar">
-      <div class="wrap">
-        <div class="brand">🦎 <span>stonk<b>gecko</b></span></div>
-        <nav class="markets-nav">#{nav}</nav>
+      <div class="wrap bar">
+        <a class="brand" href="#" data-tab="home">
+          <span class="logo">#{gecko_svg()}</span>
+          <span class="word">stonk<b>gecko</b></span>
+        </a>
+        <button class="theme" id="theme" aria-label="Toggle theme"><span class="ti"></span></button>
       </div>
     </header>
 
     <section class="hero">
       <div class="wrap">
-        <h1>World Stock Markets by Market Cap</h1>
-        <p class="sub">Top 10 exchanges, largest companies ranked by market capitalization — refreshed daily.</p>
+        <h1>The world's markets,<br><span class="hl">ranked by market cap.</span></h1>
+        <p class="sub">Top 100 companies on each of the world's major exchanges, plus a global leaderboard — rebuilt every day.</p>
         <div class="stats">
-          <div class="stat"><span class="k">Markets</span><span class="v">#{length(markets)}</span></div>
-          <div class="stat"><span class="k">Stocks tracked</span><span class="v">#{stocks}</span></div>
-          <div class="stat"><span class="k">Combined market cap</span><span class="v">#{human_usd(total)}</span></div>
+          <div class="stat"><span class="v">#{length(markets)}</span><span class="k">Markets</span></div>
+          <div class="stat"><span class="v">#{tracked}</span><span class="k">Stocks ranked</span></div>
+          <div class="stat"><span class="v">#{human_usd(total)}</span><span class="k">Tracked market cap</span></div>
         </div>
       </div>
     </section>
+
+    <nav class="tabbar"><div class="wrap tabwrap">#{tabbar}</div></nav>
+
+    <div class="wrap searchwrap">
+      <input id="search" type="search" placeholder="Filter the current tab by company or ticker…" autocomplete="off">
+    </div>
 
     <main class="wrap">
     #{sections}
@@ -346,100 +377,265 @@ defmodule Render do
 
     <footer>
       <div class="wrap">
-        <p>Built with a single self-contained Elixir script • Data via Yahoo Finance • Updated daily by GitHub Actions</p>
-        <p class="disclaimer">Market caps are estimates (converted to USD) for ranking and informational purposes only — not investment advice.</p>
+        <div class="flogo">#{gecko_svg()}</div>
+        <p>Built by a single self-contained Elixir script · Data via Yahoo Finance · Updated #{updated}</p>
+        <p class="disc">Market caps are converted to USD for ranking and shown for informational purposes only — not investment advice.</p>
       </div>
     </footer>
+    <script>#{js()}</script>
     </body>
     </html>
     """
   end
 
-  defp market_section(m, i) do
-    rows = m.rows |> Enum.map(&row_html(&1, m)) |> Enum.join("\n")
-    mcap = m.rows |> Enum.map(& &1.mcap_usd) |> Enum.sum()
+  defp ld_json(tracked, total) do
+    ~s({"@context":"https://schema.org","@type":"WebSite","name":"stonkgecko",) <>
+      ~s("url":"https://stonkgecko.com/",) <>
+      ~s("description":"World stock markets ranked by market capitalization — #{tracked} companies, #{human_usd(total)} tracked.",) <>
+      ~s("potentialAction":{"@type":"SearchAction","target":"https://stonkgecko.com/?q={search_term_string}","query-input":"required name=search_term_string"}})
+  end
+
+  # ---- Sections ------------------------------------------------------------
+
+  defp home_section(markets) do
+    cards =
+      markets
+      |> Enum.map(fn m ->
+        rows =
+          m.rows
+          |> Enum.take(10)
+          |> Enum.map(fn r ->
+            """
+            <tr>
+              <td class="r rank">#{r.rank}</td>
+              <td class="l name"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></td>
+              <td class="num">#{change_badge(r.change)}</td>
+              <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
+            </tr>
+            """
+          end)
+          |> Enum.join("")
+
+        """
+        <div class="card">
+          <button class="card-head" data-tab="#{m.id}">
+            <span class="ch-l">#{m.flag} #{e(m.name)}</span>
+            <span class="ch-r">Top 100 →</span>
+          </button>
+          <table class="mini">#{rows}</table>
+        </div>
+        """
+      end)
+      |> Enum.join("\n")
+
+    ~s(<section class="tabpane active" id="pane-home"><div class="cards">#{cards}</div></section>)
+  end
+
+  defp global_section(global) do
+    rows = global |> Enum.map(&row_html(&1, true)) |> Enum.join("\n")
 
     """
-    <section class="market" id="m#{i}">
-      <div class="market-head">
-        <h2>#{m.flag} #{e(m.name)}</h2>
-        <div class="meta">#{e(m.country)} • #{human_usd(mcap)}</div>
-      </div>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr><th class="r">#</th><th class="l">Company</th><th>Price</th><th>24h</th><th>Market Cap (USD)</th></tr>
-        </thead>
-        <tbody>
-        #{rows}
-        </tbody>
-      </table>
-      </div>
+    <section class="tabpane" id="pane-global">
+      <h2 class="pane-title">🌐 Global Top 100 <span>by market cap (USD)</span></h2>
+      #{table(rows, true)}
     </section>
     """
   end
 
-  defp row_html(row, m) do
+  defp market_section(m) do
+    rows = m.rows |> Enum.map(&row_html(&1, false)) |> Enum.join("\n")
+    mcap = m.rows |> Enum.map(& &1.mcap_usd) |> Enum.sum()
+
+    """
+    <section class="tabpane" id="pane-#{m.id}">
+      <h2 class="pane-title">#{m.flag} #{e(m.name)} <span>#{e(m.country)} · #{human_usd(mcap)}</span></h2>
+      #{table(rows, false)}
+    </section>
+    """
+  end
+
+  defp table(rows, global?) do
+    src = if global?, do: ~s(<th class="l">Market</th>), else: ""
+
+    """
+    <div class="table-scroll">
+    <table class="grid">
+      <thead><tr>
+        <th class="r">#</th><th class="l">Company</th>#{src}<th>Price</th><th>24h</th><th>Market Cap</th>
+      </tr></thead>
+      <tbody>#{rows}</tbody>
+    </table>
+    </div>
+    """
+  end
+
+  defp row_html(r, global?) do
+    mkt = if global?, do: ~s(<td class="l mk">#{r.flag} <span>#{e(r.market)}</span></td>), else: ""
+
     """
     <tr>
-      <td class="r rank">#{row.rank}</td>
-      <td class="l name"><span class="tname">#{e(row.name)}</span><span class="tkr">#{e(row.ticker)}</span></td>
-      <td class="num">#{price(row.price, m.currency)}</td>
-      <td class="num">#{change_badge(row.change)}</td>
-      <td class="num mcap">#{human_usd(row.mcap_usd)}</td>
+      <td class="r rank">#{r.rank}</td>
+      <td class="l name"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></td>#{mkt}
+      <td class="num">#{price(r.price, r.currency)}</td>
+      <td class="num">#{change_badge(r.change)}</td>
+      <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
     </tr>
     """
   end
 
+  # ---- CSS -----------------------------------------------------------------
+
   defp css do
     """
-    :root{--bg:#f8fafd;--card:#fff;--text:#0d1421;--muted:#58667e;--line:#eff2f5;
-      --green:#16c784;--red:#ea3943;--accent:#3861fb}
+    :root[data-theme="dark"]{
+      --bg:#080f0c; --bg2:#0b1310; --surface:#0f1813; --surface2:#13201a; --hover:#16261e;
+      --border:#1b2a22; --text:#e9f2ec; --muted:#7f988a; --faint:#56695e;
+      --accent:#3ff08a; --accent2:#16d472; --up:#2fdc84; --down:#ff5f73;
+      --glow:rgba(63,240,138,.18); --grain:.035;
+    }
+    :root[data-theme="light"]{
+      --bg:#f2efe6; --bg2:#eae6d9; --surface:#fffdf7; --surface2:#f6f3ea; --hover:#efece1;
+      --border:#e0dccd; --text:#10201a; --muted:#5e7066; --faint:#94a399;
+      --accent:#0c9d57; --accent2:#0a8a4c; --up:#0c9d57; --down:#e03a4d;
+      --glow:rgba(15,160,88,.10); --grain:.018;
+    }
     *{box-sizing:border-box}
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-      background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
-    .wrap{max-width:1100px;margin:0 auto;padding:0 16px}
-    .topbar{position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line)}
-    .topbar .wrap{display:flex;align-items:center;gap:20px;height:60px}
-    .brand{font-size:20px;font-weight:600;white-space:nowrap}
-    .brand b{color:var(--accent)}
-    .markets-nav{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
-    .markets-nav::-webkit-scrollbar{display:none}
-    .markets-nav a{white-space:nowrap;color:var(--muted);text-decoration:none;font-size:12px;
-      padding:6px 10px;border-radius:8px}
-    .markets-nav a:hover{background:var(--bg);color:var(--text)}
-    .hero{padding:40px 0 24px;text-align:center}
-    .hero h1{margin:0 0 8px;font-size:30px}
-    .hero .sub{margin:0 0 24px;color:var(--muted)}
-    .stats{display:flex;justify-content:center;gap:14px;flex-wrap:wrap}
-    .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 22px;min-width:150px}
-    .stat .k{display:block;color:var(--muted);font-size:12px}
-    .stat .v{display:block;font-size:22px;font-weight:700;margin-top:2px}
-    .market{background:var(--card);border:1px solid var(--line);border-radius:14px;
-      margin:18px 0;padding:6px 6px 10px;overflow:hidden}
-    .market-head{display:flex;justify-content:space-between;align-items:baseline;
-      flex-wrap:wrap;gap:6px;padding:14px 14px 6px}
-    .market-head h2{margin:0;font-size:18px}
-    .market-head .meta{color:var(--muted);font-size:13px}
-    .table-scroll{overflow-x:auto}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:11px 14px;text-align:right;white-space:nowrap}
-    th{color:var(--muted);font-size:12px;font-weight:500;border-bottom:1px solid var(--line)}
-    th.l,td.l{text-align:left}
-    th.r,td.r{text-align:center;width:40px}
-    tbody tr{border-bottom:1px solid var(--line)}
-    tbody tr:last-child{border-bottom:none}
-    tbody tr:hover{background:var(--bg)}
-    .rank{color:var(--muted);font-weight:600}
-    .name .tname{font-weight:600;display:block}
-    .name .tkr{color:var(--muted);font-size:12px;text-transform:uppercase}
-    .num{font-variant-numeric:tabular-nums}
-    .mcap{font-weight:600}
-    .chg{font-weight:600}
-    .chg.up{color:var(--green)} .chg.down{color:var(--red)} .chg.flat{color:var(--muted)}
-    footer{padding:34px 0;text-align:center;color:var(--muted);font-size:12px}
-    .disclaimer{opacity:.8;margin-top:6px}
-    @media(max-width:640px){.hero h1{font-size:24px}.brand span{display:none}}
+    html{scroll-behavior:smooth}
+    body{margin:0;font-family:"Instrument Sans",-apple-system,sans-serif;background:var(--bg);
+      color:var(--text);font-size:14.5px;line-height:1.5;-webkit-font-smoothing:antialiased;
+      background-image:radial-gradient(60vw 50vh at 75% -5%,var(--glow),transparent 60%),
+        radial-gradient(45vw 40vh at 5% 8%,var(--glow),transparent 55%);
+      background-attachment:fixed;min-height:100vh}
+    .grain{position:fixed;inset:0;pointer-events:none;z-index:1;opacity:var(--grain);
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");mix-blend-mode:overlay}
+    .wrap{max-width:1120px;margin:0 auto;padding:0 18px;position:relative;z-index:2}
+
+    .topbar{position:sticky;top:0;z-index:30;backdrop-filter:blur(14px);
+      background:color-mix(in srgb,var(--bg) 78%,transparent);border-bottom:1px solid var(--border)}
+    .bar{display:flex;align-items:center;justify-content:space-between;height:62px}
+    .brand{display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--text)}
+    .logo{width:38px;height:38px;display:block;filter:drop-shadow(0 3px 10px var(--glow))}
+    .word{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:22px;letter-spacing:-.02em}
+    .word b{color:var(--accent);font-weight:800}
+    .theme{width:40px;height:40px;border-radius:11px;border:1px solid var(--border);background:var(--surface);
+      cursor:pointer;display:grid;place-items:center;transition:.2s}
+    .theme:hover{border-color:var(--accent);background:var(--hover)}
+    .ti{width:17px;height:17px;border-radius:50%;background:var(--accent);
+      box-shadow:inset -5px -5px 0 0 var(--surface)}
+    :root[data-theme="light"] .ti{box-shadow:none;background:var(--accent)}
+
+    .hero{padding:64px 0 30px;text-align:center}
+    .hero h1{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;letter-spacing:-.035em;
+      line-height:1.02;margin:0 0 16px;font-size:clamp(34px,6.4vw,62px)}
+    .hero .hl{background:linear-gradient(100deg,var(--accent),var(--accent2));
+      -webkit-background-clip:text;background-clip:text;color:transparent}
+    .hero .sub{color:var(--muted);max-width:560px;margin:0 auto 30px;font-size:16px}
+    .stats{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+    .stat{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+      padding:16px 26px;min-width:148px;text-align:left}
+    .stat .v{display:block;font-family:"JetBrains Mono",monospace;font-weight:700;font-size:23px;color:var(--accent)}
+    .stat .k{display:block;color:var(--muted);font-size:12px;margin-top:3px;text-transform:uppercase;letter-spacing:.06em}
+
+    .tabbar{position:sticky;top:62px;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
+      backdrop-filter:blur(10px);border-bottom:1px solid var(--border);margin-top:18px}
+    .tabwrap{display:flex;gap:6px;overflow-x:auto;padding:10px 18px;scrollbar-width:none}
+    .tabwrap::-webkit-scrollbar{display:none}
+    .tab{white-space:nowrap;border:1px solid transparent;background:transparent;color:var(--muted);
+      font-family:"Instrument Sans",sans-serif;font-size:13.5px;font-weight:600;padding:8px 14px;
+      border-radius:10px;cursor:pointer;transition:.15s}
+    .tab:hover{color:var(--text);background:var(--surface)}
+    .tab.active{color:var(--bg);background:var(--accent);border-color:var(--accent)}
+    :root[data-theme="dark"] .tab.active{color:#06120c}
+
+    .searchwrap{margin:22px auto 0}
+    #search{width:100%;padding:13px 18px;border-radius:13px;border:1px solid var(--border);
+      background:var(--surface);color:var(--text);font-size:14.5px;font-family:inherit;outline:none;transition:.2s}
+    #search:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--glow)}
+    #search::placeholder{color:var(--faint)}
+
+    main{padding:18px 0 40px}
+    .tabpane{display:none;animation:fade .25s ease}
+    .tabpane.active{display:block}
+    @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+    .pane-title{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:24px;
+      letter-spacing:-.02em;margin:6px 4px 14px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+    .pane-title span{font-family:"Instrument Sans";font-size:14px;font-weight:500;color:var(--muted)}
+
+    .table-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:16px;background:var(--surface)}
+    table.grid{width:100%;border-collapse:collapse;min-width:560px}
+    .grid th,.grid td{padding:13px 16px;text-align:right;white-space:nowrap}
+    .grid th{position:sticky;top:0;background:var(--surface2);color:var(--muted);font-size:11.5px;
+      font-weight:600;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);z-index:1}
+    .grid th.l,.grid td.l{text-align:left}
+    .grid th.r,.grid td.r{text-align:center;width:54px}
+    .grid tbody tr{border-bottom:1px solid var(--border)}
+    .grid tbody tr:last-child{border-bottom:none}
+    .grid tbody tr:hover{background:var(--hover)}
+    .rank{font-family:"JetBrains Mono",monospace;color:var(--faint);font-weight:700;font-size:13px}
+    .name{max-width:280px}
+    .name .tn{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis}
+    .name .tk{color:var(--muted);font-size:11.5px;font-family:"JetBrains Mono",monospace}
+    .mk{color:var(--muted);font-size:12.5px}.mk span{vertical-align:middle}
+    .num{font-family:"JetBrains Mono",monospace;font-size:13px}
+    .mcap{font-weight:700;color:var(--text)}
+    .chg{font-weight:700;font-size:12.5px}
+    .chg.up{color:var(--up)} .chg.down{color:var(--down)} .chg.flat{color:var(--faint)}
+
+    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;
+      transition:.2s}
+    .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+    .card-head{width:100%;display:flex;align-items:center;justify-content:space-between;
+      padding:15px 17px;background:var(--surface2);border:none;border-bottom:1px solid var(--border);
+      cursor:pointer;color:var(--text);font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:15.5px}
+    .ch-r{color:var(--accent);font-family:"Instrument Sans";font-size:12.5px;font-weight:600}
+    table.mini{width:100%;border-collapse:collapse}
+    .mini td{padding:9px 16px;border-bottom:1px solid var(--border)}
+    .mini tr:last-child td{border-bottom:none}
+    .mini tr:hover{background:var(--hover)}
+    .mini .num{text-align:right}
+    .mini .mcap{text-align:right}
+
+    footer{border-top:1px solid var(--border);padding:38px 0;text-align:center;color:var(--muted);font-size:12.5px}
+    .flogo{width:34px;height:34px;margin:0 auto 12px;opacity:.85}
+    .disc{color:var(--faint);margin-top:6px;font-size:11.5px}
+    @media(max-width:560px){.hero{padding:42px 0 22px}.word{font-size:19px}.stat{min-width:120px;padding:13px 18px}}
+    """
+  end
+
+  # ---- JS ------------------------------------------------------------------
+
+  defp js do
+    """
+    (function(){
+      var tabs=document.querySelectorAll('[data-tab]');
+      var panes=document.querySelectorAll('.tabpane');
+      var btns=document.querySelectorAll('.tab');
+      var search=document.getElementById('search');
+      function show(id){
+        panes.forEach(function(p){p.classList.toggle('active',p.id==='pane-'+id)});
+        btns.forEach(function(b){b.classList.toggle('active',b.dataset.tab===id)});
+        if(search){search.value='';filter('')}
+        window.scrollTo({top:document.querySelector('.tabbar').offsetTop-70,behavior:'smooth'});
+      }
+      tabs.forEach(function(t){t.addEventListener('click',function(e){e.preventDefault();show(t.dataset.tab)})});
+      function filter(q){
+        q=q.toLowerCase();
+        var pane=document.querySelector('.tabpane.active');
+        if(!pane)return;
+        pane.querySelectorAll('tbody tr, .mini tr').forEach(function(tr){
+          tr.style.display = !q || tr.textContent.toLowerCase().indexOf(q)>-1 ? '' : 'none';
+        });
+      }
+      if(search)search.addEventListener('input',function(){filter(search.value)});
+      var theme=document.getElementById('theme');
+      theme.addEventListener('click',function(){
+        var cur=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';
+        document.documentElement.setAttribute('data-theme',cur);
+        try{localStorage.setItem('sg-theme',cur)}catch(e){}
+      });
+    })();
     """
   end
 end
