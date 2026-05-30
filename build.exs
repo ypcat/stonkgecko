@@ -38,6 +38,7 @@ defmodule Stonk do
       %{id: "shenzhen", name: "Shenzhen (SZSE)", country: "China", flag: "🇨🇳", suffix: ".SZ", tickers: shenzhen()},
       %{id: "hongkong", name: "Hong Kong (HKEX)", country: "Hong Kong", flag: "🇭🇰", suffix: ".HK", tickers: hongkong()},
       %{id: "toronto", name: "Toronto (TSX)", country: "Canada", flag: "🇨🇦", suffix: ".TO", tickers: toronto()},
+      %{id: "london", name: "London (LSE)", country: "United Kingdom", flag: "🇬🇧", suffix: ".L", tickers: london()},
       %{id: "saudi", name: "Tadawul", country: "Saudi Arabia", flag: "🇸🇦", suffix: ".SR", tickers: saudi()},
       %{id: "taiwan", name: "Taiwan (TWSE)", country: "Taiwan", flag: "🇹🇼", suffix: ".TW", tickers: taiwan()}
     ]
@@ -64,6 +65,9 @@ defmodule Stonk do
   defp toronto, do: ~w(RY.TO SHOP.TO TD.TO BN.TO ENB.TO AEM.TO CNR.TO BMO.TO CM.TO CP.TO BAM.TO CNQ.TO TRI.TO BNS.TO ATD.TO SU.TO TRP.TO MFC.TO BNRE.TO WCN.TO FNV.TO ABX.TO L.TO FTS.TO T.TO NTR.TO WPM.TO CSU.TO GIB-A.TO SLF.TO IFC.TO PPL.TO DOL.TO IMO.TO BCE.TO GWO.TO POW.TO NA.TO K.TO MRU.TO CVE.TO H.TO QSR.TO TECK-B.TO GFL.TO FM.TO MG.TO CCO.TO EMA.TO WN.TO OTEX.TO SAP.TO RCI-B.TO GIL.TO TOU.TO FFH.TO AQN.TO STN.TO WSP.TO DSG.TO PAAS.TO TIH.TO CTC-A.TO X.TO BIP-UN.TO BEP-UN.TO AC.TO CAE.TO CIGI.TO EFN.TO ARX.TO NGT.TO FSV.TO WFG.TO IVN.TO CCL-B.TO TFII.TO LUN.TO AGI.TO EQB.TO ONEX.TO DPM.TO EMP-A.TO BTO.TO CPX.TO BLX.TO PSK.TO KEY.TO NPI.TO OGC.TO SSRM.TO LNR.TO MEG.TO ERO.TO TPZ.TO PXT.TO BYD.TO ATZ.TO WDO.TO SES.TO CG.TO IGM.TO GRT-UN.TO REI-UN.TO CAR-UN.TO FCR-UN.TO CSH-UN.TO DOO.TO CLS.TO PRMW.TO HBM.TO WCP.TO VRN.TO)
 
   defp saudi, do: ~w(2222.SR 1120.SR 7010.SR 1180.SR 2010.SR 1150.SR 1010.SR 1060.SR 1211.SR 2280.SR 1020.SR 1030.SR 1050.SR 7020.SR 4002.SR 4013.SR 2020.SR 2350.SR 2380.SR 4190.SR 4030.SR 4001.SR 2310.SR 5110.SR 1080.SR 2290.SR 2001.SR 2330.SR 2060.SR 2040.SR 2050.SR 2270.SR 6001.SR 6010.SR 6004.SR 4003.SR 4008.SR 4050.SR 4061.SR 4240.SR 4031.SR 4040.SR 4200.SR 4280.SR 4321.SR 4338.SR 7200.SR 7203.SR 7202.SR 7204.SR 2082.SR 5120.SR 1182.SR 1183.SR 8210.SR 8010.SR 8012.SR 4142.SR 1212.SR 1214.SR 1320.SR 1301.SR 1304.SR 3010.SR 3020.SR 3030.SR 3040.SR 3050.SR 3060.SR 3080.SR 3090.SR 3091.SR 3001.SR 3002.SR 3003.SR 3004.SR 3005.SR 4250.SR 4300.SR 4020.SR 4090.SR 4100.SR 4150.SR 4220.SR 4160.SR 2080.SR 2081.SR 2110.SR 2130.SR 2150.SR 2160.SR 2180.SR 2370.SR)
+
+  # London prices come back in pence (currency "GBp") but market cap in pounds.
+  defp london, do: ~w(AZN.L SHEL.L HSBA.L ULVR.L BP.L RIO.L GSK.L REL.L DGE.L BATS.L GLEN.L LSEG.L RKT.L NG.L BARC.L LLOY.L CPG.L AAL.L PRU.L VOD.L TSCO.L NWG.L STAN.L BA.L HLN.L IMB.L SSE.L EXPN.L AV.L LGEN.L ABF.L SGRO.L ANTO.L SMT.L WTB.L III.L RTO.L INF.L SN.L CCH.L PSON.L WPP.L ITRK.L HLMA.L SMIN.L BNZL.L MNDI.L ADM.L PSN.L BKG.L LAND.L BLND.L SVT.L UU.L CNA.L SBRY.L KGF.L NXT.L JD.L BDEV.L TW.L DCC.L SPX.L CRDA.L RR.L AHT.L FRES.L ENT.L HIK.L SDR.L WEIR.L MRO.L DPLM.L AUTO.L RMV.L ICG.L PHNX.L BEZ.L BT-A.L SGE.L FCIT.L SMDS.L EDV.L GAW.L HSX.L BME.L HWDN.L IHG.L WG.L QQ.L ROR.L MNG.L OCDO.L TATE.L DLG.L FRAS.L CTEC.L BAB.L WIZZ.L EZJ.L ITV.L MKS.L PSH.L)
 
   defp taiwan, do: ~w(2330.TW 2317.TW 2454.TW 2308.TW 2382.TW 2891.TW 2412.TW 2881.TW 2882.TW 3711.TW 2303.TW 2886.TW 2884.TW 3045.TW 2357.TW 2885.TW 2880.TW 2892.TW 5880.TW 2883.TW 2887.TW 3008.TW 2002.TW 1303.TW 1301.TW 2395.TW 2890.TW 6505.TW 1216.TW 2207.TW 2603.TW 2327.TW 3034.TW 2379.TW 3231.TW 2345.TW 4938.TW 2912.TW 1326.TW 3037.TW 2301.TW 2409.TW 2474.TW 2376.TW 3661.TW 3017.TW 3702.TW 2354.TW 2356.TW 6669.TW 1101.TW 1102.TW 2618.TW 2610.TW 2615.TW 2609.TW 2888.TW 2889.TW 5871.TW 5876.TW 2801.TW 2809.TW 2823.TW 2834.TW 2105.TW 9910.TW 9904.TW 1402.TW 1476.TW 1590.TW 2049.TW 2360.TW 2377.TW 2383.TW 2451.TW 2458.TW 3023.TW 3035.TW 3036.TW 3443.TW 3533.TW 3653.TW 4904.TW 4958.TW 6415.TW 6446.TW 6488.TW 8046.TW 8454.TW 9921.TW 9945.TW 1227.TW 1210.TW 1229.TW 2106.TW 2371.TW 2353.TW 2347.TW 2352.TW 6239.TW 6147.TW 3532.TW 3406.TW 5269.TW 5347.TW 1605.TW 1609.TW 2204.TW 9914.TW 2027.TW)
 
@@ -174,6 +178,9 @@ defmodule Stonk do
 
   # FX: 1 unit of `cur` -> USD via the chart endpoint (no crumb needed).
   def fx_rate("USD"), do: 1.0
+  # London market caps are reported in pounds even though the quote currency is
+  # "GBp" (pence), so both map to the GBP->USD rate.
+  def fx_rate("GBp"), do: fx_rate("GBP")
   def fx_rate(cur) do
     url = "https://query1.finance.yahoo.com/v8/finance/chart/#{cur}USD=X"
 
@@ -298,6 +305,7 @@ defmodule Render do
              "INR" => "₹", "CAD" => "C$", "SAR" => "ر.س ", "TWD" => "NT$", "NOK" => "kr ",
              "GBP" => "£", "GBp" => "p ", "DKK" => "kr ", "CHF" => "Fr ", "SGD" => "S$"}
 
+  def price(p, "GBp"), do: "£#{:erlang.float_to_binary(p / 100, decimals: 2)}"
   def price(p, cur), do: "#{Map.get(@symbols, cur, "")}#{:erlang.float_to_binary(p * 1.0, decimals: 2)}"
 
   def change_badge(nil), do: ~s(<span class="chg flat">·</span>)
