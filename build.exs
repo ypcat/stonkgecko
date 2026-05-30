@@ -18,6 +18,11 @@ Mix.install([{:req, "~> 0.5"}])
 defmodule Stonk do
   @ua "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
   @euronext_suffixes ~w(.PA .AS .BR .LS .IR .OL .MI)
+  @cookie_urls ["https://fc.yahoo.com/", "https://finance.yahoo.com/"]
+  @crumb_urls ["https://query1.finance.yahoo.com/v1/test/getcrumb", "https://query2.finance.yahoo.com/v1/test/getcrumb"]
+  # Abort (without writing) below this many quotes, so a rate-limited runner
+  # never overwrites the last good deploy with a sparse/empty page.
+  @min_quotes 500
 
   # Markets in rough descending order of total capitalization. `suffix` drives
   # validation: "" = US (no dot), :euronext = any Euronext venue suffix,
@@ -113,18 +118,51 @@ defmodule Stonk do
     end
   end
 
-  defp crumb_handshake do
-    with {:ok, resp} <-
-           Req.get("https://fc.yahoo.com/", headers: [{"user-agent", @ua}], redirect: false, receive_timeout: 15_000),
-         cookies when cookies != "" <- collect_cookies(resp),
-         {:ok, %{status: 200, body: crumb}} when is_binary(crumb) and crumb != "" <-
-           Req.get("https://query1.finance.yahoo.com/v1/test/getcrumb",
-             headers: [{"user-agent", @ua}, {"cookie", cookies}], receive_timeout: 15_000
-           ) do
-      {:ok, String.trim(crumb), cookies}
-    else
-      _ -> :error
+  # Yahoo frequently rate-limits cloud/CI IPs, so retry the cookie+crumb dance
+  # several times with backoff, trying both cookie sources and crumb hosts.
+  defp crumb_handshake(attempt \\ 1)
+  defp crumb_handshake(attempt) when attempt > 6, do: :error
+  defp crumb_handshake(attempt) do
+    case attempt_handshake() do
+      {:ok, _, _} = ok ->
+        ok
+
+      :error ->
+        Process.sleep(1200 * attempt)
+        crumb_handshake(attempt + 1)
     end
+  end
+
+  defp attempt_handshake do
+    Enum.reduce_while(@cookie_urls, :error, fn url, _ ->
+      cookies =
+        case Req.get(url, headers: [{"user-agent", @ua}], redirect: false, receive_timeout: 15_000) do
+          {:ok, resp} -> collect_cookies(resp)
+          _ -> ""
+        end
+
+      with true <- cookies != "",
+           crumb when is_binary(crumb) <- fetch_crumb(cookies) do
+        {:halt, {:ok, crumb, cookies}}
+      else
+        _ -> {:cont, :error}
+      end
+    end)
+  end
+
+  # A valid crumb is a short, space-free token; "Too Many Requests" / HTML
+  # error bodies are rejected.
+  defp fetch_crumb(cookies) do
+    Enum.find_value(@crumb_urls, fn url ->
+      case Req.get(url, headers: [{"user-agent", @ua}, {"cookie", cookies}], receive_timeout: 15_000) do
+        {:ok, %{status: 200, body: b}} when is_binary(b) ->
+          t = String.trim(b)
+          if t != "" and byte_size(t) < 80 and not String.contains?(t, " "), do: t
+
+        _ ->
+          nil
+      end
+    end)
   end
 
   defp collect_cookies(%Req.Response{} = resp) do
@@ -175,6 +213,12 @@ defmodule Stonk do
 
     quotes = fetch_quotes(all)
     IO.puts("  quotes returned: #{map_size(quotes)}")
+
+    if map_size(quotes) < @min_quotes do
+      IO.puts("  ABORT: only #{map_size(quotes)} quotes (< #{@min_quotes}) — Yahoo likely blocked this runner. " <>
+                "Not writing; the last good deploy stays live.")
+      System.halt(1)
+    end
 
     currencies = quotes |> Map.values() |> Enum.map(& &1.currency) |> Enum.uniq()
     fx = Map.new(currencies, fn c -> {c, fx_rate(c)} end)
