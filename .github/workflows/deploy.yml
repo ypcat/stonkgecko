@@ -1,0 +1,62 @@
+name: Build & Deploy stonkgecko
+
+on:
+  schedule:
+    # Daily at 06:00 UTC (after US market close, before Asia open settles)
+    - cron: "0 6 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Allow the GITHUB_TOKEN to deploy to Pages and read the repo
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one concurrent deployment; don't cancel an in-progress run
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.17"
+          otp-version: "27"
+
+      - name: Cache Mix.install deps
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mix
+          key: mix-install-${{ hashFiles('build.exs') }}
+          restore-keys: mix-install-
+
+      - name: Build site
+        env:
+          # Optional: set an FMP API key as a repo secret to use it as a data source.
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: elixir build.exs
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
