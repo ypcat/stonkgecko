@@ -464,7 +464,7 @@ defmodule Render do
             """
             <tr>
               <td class="r rank">#{r.rank}</td>
-              <td class="l name"><span class="nm"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></span></td>
+              <td class="l name"><span class="tn">#{e(r.name)}</span><a class="tk" href="https://finance.yahoo.com/chart/#{URI.encode(r.ticker)}" target="_blank" rel="noopener">#{e(r.ticker)}</a></td>
               <td class="num pc"><span class="px">#{price(r.price, r.currency)}</span>#{change_badge(r.change)}</td>
               <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
             </tr>
@@ -531,7 +531,7 @@ defmodule Render do
     """
     <tr>
       <td class="r rank">#{r.rank}</td>
-      <td class="l name"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></td>#{mkt}
+      <td class="l name"><span class="tn">#{e(r.name)}</span><a class="tk" href="https://finance.yahoo.com/chart/#{URI.encode(r.ticker)}" target="_blank" rel="noopener">#{e(r.ticker)}</a></td>#{mkt}
       <td class="num">#{price(r.price, r.currency)}</td>
       <td class="num">#{change_badge(r.change)}</td>
       <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
@@ -631,7 +631,8 @@ defmodule Render do
     .rank{font-family:"JetBrains Mono",monospace;color:var(--faint);font-weight:700;font-size:13px}
     .name{max-width:280px}
     .name .tn{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis}
-    .name .tk{color:var(--muted);font-size:11.5px;font-family:"JetBrains Mono",monospace}
+    .name a.tk{display:block;color:var(--muted);font-size:11.5px;font-family:"JetBrains Mono",monospace;text-decoration:none}
+    .name a.tk:hover{color:var(--accent);text-decoration:underline}
     .mk{color:var(--muted);font-size:12.5px}.mk span{vertical-align:middle}
     .num{font-family:"JetBrains Mono",monospace;font-size:13px}
     .mcap{font-weight:700;color:var(--text)}
@@ -655,14 +656,11 @@ defmodule Render do
     .ch-cap{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:13.5px;color:var(--text)}
     .ch-go{color:var(--accent);font-family:"Instrument Sans";font-size:11.5px;font-weight:600}
     table.mini{width:100%;border-collapse:collapse}
-    .mini td{padding:9px 12px;border-bottom:1px solid var(--border)}
+    .mini td{padding:8px 12px;border-bottom:1px solid var(--border)}
     .mini tr:last-child td{border-bottom:none}
     .mini tr:hover{background:var(--hover)}
-    .mini .r{width:22px;text-align:center;padding:9px 2px 9px 13px}
+    .mini .r{width:22px;text-align:center;padding:8px 2px 8px 13px}
     .mini td.name{width:100%;max-width:0;padding-left:6px}
-    .mini .nm{display:flex;align-items:baseline;gap:8px}
-    .mini .nm .tn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-    .mini .nm .tk{flex:none;color:var(--muted);font-size:11px;font-family:"JetBrains Mono",monospace}
     .mini .num{text-align:right;white-space:nowrap}
     .mini .pc{width:1%}
     .mini .pc .px{display:block;font-family:"JetBrains Mono",monospace;font-size:12.5px}
