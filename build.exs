@@ -465,8 +465,7 @@ defmodule Render do
             <tr>
               <td class="r rank">#{r.rank}</td>
               <td class="l name"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></td>
-              <td class="num">#{price(r.price, r.currency)}</td>
-              <td class="num">#{change_badge(r.change)}</td>
+              <td class="num pc"><span class="px">#{price(r.price, r.currency)}</span>#{change_badge(r.change)}</td>
               <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
             </tr>
             """
@@ -656,16 +655,17 @@ defmodule Render do
     .ch-cap{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:13.5px;color:var(--text)}
     .ch-go{color:var(--accent);font-family:"Instrument Sans";font-size:11.5px;font-weight:600}
     table.mini{width:100%;border-collapse:collapse}
-    .mini td{padding:8px 9px;border-bottom:1px solid var(--border)}
+    .mini td{padding:9px 14px;border-bottom:1px solid var(--border)}
     .mini tr:last-child td{border-bottom:none}
     .mini tr:hover{background:var(--hover)}
-    .mini .r{width:24px;text-align:center;padding-left:13px}
-    .mini .name{width:60%;max-width:0;overflow:hidden;padding-left:6px}
+    .mini .r{width:22px;text-align:center;padding:9px 4px 9px 13px}
+    .mini .name{width:50%;max-width:0;overflow:hidden;padding-left:8px}
     .mini .name .tn{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .mini .name .tk{display:none}
-    .mini .num{text-align:right;white-space:nowrap;font-size:12.5px}
-    .mini .chg{font-size:11.5px}
-    .mini .mcap{padding-right:13px}
+    .mini .name .tk{display:block;font-size:11px}
+    .mini .num{text-align:right;white-space:nowrap}
+    .mini .pc .px{display:block;font-family:"JetBrains Mono",monospace;font-size:12.5px}
+    .mini .pc .chg{display:block;font-size:11px;margin-top:1px}
+    .mini .mcap{padding-right:14px}
 
     footer{border-top:1px solid var(--border);padding:38px 0;text-align:center;color:var(--muted);font-size:12.5px}
     .flogo{width:34px;height:34px;margin:0 auto 12px;opacity:.85}
