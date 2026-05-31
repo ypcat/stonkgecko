@@ -464,7 +464,7 @@ defmodule Render do
             """
             <tr>
               <td class="r rank">#{r.rank}</td>
-              <td class="l name"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></td>
+              <td class="l name"><span class="nm"><span class="tn">#{e(r.name)}</span><span class="tk">#{e(r.ticker)}</span></span></td>
               <td class="num pc"><span class="px">#{price(r.price, r.currency)}</span>#{change_badge(r.change)}</td>
               <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
             </tr>
