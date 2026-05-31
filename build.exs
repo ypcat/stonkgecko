@@ -655,17 +655,19 @@ defmodule Render do
     .ch-cap{font-family:"JetBrains Mono",monospace;font-weight:700;font-size:13.5px;color:var(--text)}
     .ch-go{color:var(--accent);font-family:"Instrument Sans";font-size:11.5px;font-weight:600}
     table.mini{width:100%;border-collapse:collapse}
-    .mini td{padding:9px 14px;border-bottom:1px solid var(--border)}
+    .mini td{padding:9px 12px;border-bottom:1px solid var(--border)}
     .mini tr:last-child td{border-bottom:none}
     .mini tr:hover{background:var(--hover)}
-    .mini .r{width:22px;text-align:center;padding:9px 4px 9px 13px}
-    .mini .name{width:50%;max-width:0;overflow:hidden;padding-left:8px}
-    .mini .name .tn{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .mini .name .tk{display:block;font-size:11px}
+    .mini .r{width:22px;text-align:center;padding:9px 2px 9px 13px}
+    .mini td.name{width:100%;max-width:0;padding-left:6px}
+    .mini .nm{display:flex;align-items:baseline;gap:8px}
+    .mini .nm .tn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+    .mini .nm .tk{flex:none;color:var(--muted);font-size:11px;font-family:"JetBrains Mono",monospace}
     .mini .num{text-align:right;white-space:nowrap}
+    .mini .pc{width:1%}
     .mini .pc .px{display:block;font-family:"JetBrains Mono",monospace;font-size:12.5px}
-    .mini .pc .chg{display:block;font-size:11px;margin-top:1px}
-    .mini .mcap{padding-right:14px}
+    .mini .pc .chg{display:block;font-size:11px;line-height:1.2}
+    .mini .mcap{width:1%;padding-right:13px}
 
     footer{border-top:1px solid var(--border);padding:38px 0;text-align:center;color:var(--muted);font-size:12.5px}
     .flogo{width:34px;height:34px;margin:0 auto 12px;opacity:.85}
