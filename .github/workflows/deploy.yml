@@ -3,8 +3,7 @@ name: Build & Deploy stonkgecko
 on:
   schedule:
     # Every 6 hours. Yahoo intermittently rate-limits CI runners; multiple
-    # attempts per day mean a blocked window doesn't skip the daily refresh
-    # (the build aborts without deploying when it can't fetch enough data).
+    # attempts per day mean a blocked window doesn't skip the daily refresh.
     - cron: "0 */6 * * *"
   push:
     branches: [main]
@@ -24,6 +23,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.build.outputs.deploy }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,19 +42,30 @@ jobs:
           key: mix-install-${{ hashFiles('build.exs') }}
           restore-keys: mix-install-
 
+      # build.exs exits 0 and writes public/index.html only when it fetched
+      # enough live data. If Yahoo throttled the runner it exits 0 without
+      # writing, so we skip the deploy (keeping the last good site) instead of
+      # failing the whole workflow. A real crash still exits non-zero -> fails.
       - name: Build site
-        env:
-          # Optional: set an FMP API key as a repo secret to use it as a data source.
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-        run: elixir build.exs
+        id: build
+        run: |
+          elixir build.exs
+          if [ -f public/index.html ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Yahoo throttled this run — no data fetched, skipping deploy. The last good site stays live."
+          fi
 
       - name: Upload Pages artifact
+        if: steps.build.outputs.deploy == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
   deploy:
     needs: build
+    if: needs.build.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

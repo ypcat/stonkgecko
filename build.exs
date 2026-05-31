@@ -223,9 +223,9 @@ defmodule Stonk do
     IO.puts("  quotes returned: #{map_size(quotes)}")
 
     if map_size(quotes) < @min_quotes do
-      IO.puts("  ABORT: only #{map_size(quotes)} quotes (< #{@min_quotes}) — Yahoo likely blocked this runner. " <>
-                "Not writing; the last good deploy stays live.")
-      System.halt(1)
+      IO.puts("  SKIP: only #{map_size(quotes)} quotes (< #{@min_quotes}) — Yahoo throttled this runner. " <>
+                "Writing nothing and exiting cleanly so the deploy is skipped and the last good site stays live.")
+      System.halt(0)
     end
 
     currencies = quotes |> Map.values() |> Enum.map(& &1.currency) |> Enum.uniq()
