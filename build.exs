@@ -79,22 +79,15 @@ defmodule Stonk do
 
   # ---- Yahoo data fetching -------------------------------------------------
 
-  def fetch_quotes(tickers) do
-    case crumb_handshake() do
-      {:ok, crumb, cookies} ->
-        tickers
-        |> Enum.chunk_every(50)
-        |> Enum.with_index()
-        |> Enum.flat_map(fn {batch, i} ->
-          if i > 0, do: Process.sleep(150)
-          quote_batch(batch, crumb, cookies)
-        end)
-        |> Map.new()
-
-      :error ->
-        IO.puts("  ! crumb handshake failed — no market-cap data available")
-        %{}
-    end
+  def fetch_quotes(tickers, crumb, cookies) do
+    tickers
+    |> Enum.chunk_every(50)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {batch, i} ->
+      if i > 0, do: Process.sleep(150)
+      quote_batch(batch, crumb, cookies)
+    end)
+    |> Map.new()
   end
 
   defp quote_batch(batch, crumb, cookies) do
@@ -121,6 +114,90 @@ defmodule Stonk do
         []
     end
   end
+
+  # ---- Historical change (7d / 30d / 1y) -----------------------------------
+  #
+  # Yahoo's batched `spark` endpoint returns up to a year of daily closes per
+  # symbol in a single call, from which the 7d/30d/1y percentage moves are
+  # derived. It reuses the same crumb+cookie handshake as the quote endpoint.
+  # Any failure degrades to nil (rendered as a neutral "·") rather than crashing.
+
+  def fetch_history(tickers, crumb, cookies) do
+    tickers
+    |> Enum.chunk_every(50)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {batch, i} ->
+      if i > 0, do: Process.sleep(150)
+      spark_batch(batch, crumb, cookies)
+    end)
+    |> Map.new()
+  end
+
+  defp spark_batch(batch, crumb, cookies) do
+    url = "https://query1.finance.yahoo.com/v7/finance/spark"
+
+    case Req.get(url,
+           params: [symbols: Enum.join(batch, ","), range: "1y", interval: "1d", crumb: crumb],
+           headers: [{"user-agent", @ua}, {"cookie", cookies}],
+           retry: :transient, max_retries: 3, receive_timeout: 25_000
+         ) do
+      {:ok, %{status: 200, body: %{"spark" => %{"result" => results}}}} when is_list(results) ->
+        Enum.flat_map(results, &parse_spark_result/1)
+
+      _ ->
+        []
+    end
+  end
+
+  defp parse_spark_result(%{"symbol" => sym, "response" => [resp | _]}) when is_map(resp) do
+    ts = resp["timestamp"] || []
+
+    closes =
+      case get_in(resp, ["indicators", "quote"]) do
+        [%{"close" => c} | _] when is_list(c) -> c
+        _ -> []
+      end
+
+    [{sym, changes_from_series(ts, closes)}]
+  end
+
+  defp parse_spark_result(_), do: []
+
+  # Pair up (timestamp, close), drop gaps/holidays, then read off the move from
+  # the close nearest each lookback horizon to the most recent close.
+  defp changes_from_series(ts, closes) when is_list(ts) and is_list(closes) do
+    pairs =
+      ts
+      |> Enum.zip(closes)
+      |> Enum.filter(fn {t, c} -> is_number(t) and is_number(c) and c > 0 end)
+
+    case List.last(pairs) do
+      {_t, last} ->
+        %{
+          d7: pct_change(price_near(pairs, 7), last),
+          d30: pct_change(price_near(pairs, 30), last),
+          d1y: pct_change(pairs |> List.first() |> elem(1), last)
+        }
+
+      nil ->
+        %{d7: nil, d30: nil, d1y: nil}
+    end
+  end
+
+  defp changes_from_series(_, _), do: %{d7: nil, d30: nil, d1y: nil}
+
+  defp price_near(pairs, days_ago) do
+    target = System.system_time(:second) - days_ago * 86_400
+
+    pairs
+    |> Enum.min_by(fn {t, _c} -> abs(t - target) end)
+    |> elem(1)
+  end
+
+  defp pct_change(old, cur) when is_number(old) and is_number(cur) and old > 0,
+    do: (cur - old) / old * 100
+
+  defp pct_change(_, _), do: nil
 
   # Yahoo frequently rate-limits cloud/CI IPs, so retry the cookie+crumb dance
   # several times with backoff, trying both cookie sources and crumb hosts.
@@ -219,8 +296,17 @@ defmodule Stonk do
     all = Enum.flat_map(prepared, & &1.tickers)
     IO.puts("  candidates: #{length(all)} tickers across #{length(prepared)} markets")
 
-    quotes = fetch_quotes(all)
-    IO.puts("  quotes returned: #{map_size(quotes)}")
+    {quotes, history} =
+      case crumb_handshake() do
+        {:ok, crumb, cookies} ->
+          {fetch_quotes(all, crumb, cookies), fetch_history(all, crumb, cookies)}
+
+        :error ->
+          IO.puts("  ! crumb handshake failed — no market-cap data available")
+          {%{}, %{}}
+      end
+
+    IO.puts("  quotes returned: #{map_size(quotes)}; history returned: #{map_size(history)}")
 
     if map_size(quotes) < @min_quotes do
       IO.puts("  SKIP: only #{map_size(quotes)} quotes (< #{@min_quotes}) — Yahoo throttled this runner. " <>
@@ -237,7 +323,7 @@ defmodule Stonk do
       |> Enum.map(fn m ->
         rows =
           m.tickers
-          |> Enum.map(fn t -> build_row(t, quotes[t], fx, m) end)
+          |> Enum.map(fn t -> build_row(t, quotes[t], history[t], fx, m) end)
           |> Enum.reject(&is_nil/1)
           |> Enum.sort_by(& &1.mcap_usd, :desc)
           |> Enum.take(100)
@@ -272,9 +358,10 @@ defmodule Stonk do
     IO.puts("stonkgecko: wrote public/index.html (#{byte_size(html)} bytes)")
   end
 
-  defp build_row(_t, nil, _fx, _m), do: nil
-  defp build_row(t, q, fx, m) do
+  defp build_row(_t, nil, _h, _fx, _m), do: nil
+  defp build_row(t, q, h, fx, m) do
     rate = Map.get(fx, q.currency) || 1.0
+    h = h || %{}
 
     %{
       ticker: t,
@@ -284,6 +371,9 @@ defmodule Stonk do
       currency: q.currency,
       price: q.price,
       change: q.change,
+      d7: Map.get(h, :d7),
+      d30: Map.get(h, :d30),
+      d1y: Map.get(h, :d1y),
       mcap_usd: q.mcap * rate
     }
   end
@@ -517,7 +607,7 @@ defmodule Render do
     <div class="table-scroll">
     <table class="grid">
       <thead><tr>
-        <th class="r">#</th><th class="l">Company</th>#{src}<th>Price</th><th>24h</th><th>Market Cap</th>
+        <th class="r">#</th><th class="l">Company</th>#{src}<th>Price</th><th>24h</th><th>7d</th><th>30d</th><th>1y</th><th>Market Cap</th>
       </tr></thead>
       <tbody>#{rows}</tbody>
     </table>
@@ -534,6 +624,9 @@ defmodule Render do
       <td class="l name"><span class="tn">#{e(r.name)}</span><a class="tk" href="https://finance.yahoo.com/chart/#{URI.encode(r.ticker)}" target="_blank" rel="noopener">#{e(r.ticker)}</a></td>#{mkt}
       <td class="num">#{price(r.price, r.currency)}</td>
       <td class="num">#{change_badge(r.change)}</td>
+      <td class="num">#{change_badge(r.d7)}</td>
+      <td class="num">#{change_badge(r.d30)}</td>
+      <td class="num">#{change_badge(r.d1y)}</td>
       <td class="num mcap">#{human_usd(r.mcap_usd)}</td>
     </tr>
     """
@@ -619,7 +712,7 @@ defmodule Render do
     .pane-title span{font-family:"Instrument Sans";font-size:14px;font-weight:500;color:var(--muted)}
 
     .table-scroll{overflow-x:auto;border:1px solid var(--border);border-radius:16px;background:var(--surface)}
-    table.grid{width:100%;border-collapse:collapse;min-width:560px}
+    table.grid{width:100%;border-collapse:collapse;min-width:820px}
     .grid th,.grid td{padding:13px 16px;text-align:right;white-space:nowrap}
     .grid th{position:sticky;top:0;background:var(--surface2);color:var(--muted);font-size:11.5px;
       font-weight:600;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border);z-index:1}
