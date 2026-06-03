@@ -329,7 +329,17 @@ defmodule Stonk do
           |> Enum.take(100)
           |> rank()
 
-        m |> Map.put(:rows, rows) |> Map.put(:total, Enum.sum(Enum.map(rows, & &1.mcap_usd)))
+        total = Enum.sum(Enum.map(rows, & &1.mcap_usd))
+
+        valid = Enum.reject(rows, fn r -> is_nil(r.change) end)
+        weighted_denom = Enum.sum(Enum.map(valid, & &1.mcap_usd))
+
+        total_change =
+          if weighted_denom > 0 do
+            Enum.sum(Enum.map(valid, fn r -> r.mcap_usd * r.change end)) / weighted_denom
+          end
+
+        m |> Map.put(:rows, rows) |> Map.put(:total, total) |> Map.put(:total_change, total_change)
       end)
       # Order markets by their tracked market cap (sum of top-100), not a hand-coded list.
       |> Enum.sort_by(& &1.total, :desc)
@@ -566,7 +576,7 @@ defmodule Render do
         <div class="card">
           <button class="card-head" data-tab="#{m.id}">
             <span class="ch-l"><span class="ch-rank">#{m.mrank}</span><span class="ch-name">#{m.flag} #{e(m.name)}</span></span>
-            <span class="ch-r"><span class="ch-cap">#{human_usd(m.total)}</span><span class="ch-go">Top 100 →</span></span>
+            <span class="ch-r"><span class="ch-cap">#{human_usd(m.total)}</span>#{change_badge(m.total_change)}</span>
           </button>
           <table class="mini">#{rows}</table>
         </div>
