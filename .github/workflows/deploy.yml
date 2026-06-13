@@ -2,10 +2,10 @@ name: Build & Deploy stonkgecko
 
 on:
   schedule:
-    # Once a day at 06:00 UTC to stay well within the free-tier Actions
+    # Once a day to stay well within the free-tier Actions
     # minutes. If a run hits Yahoo throttling it skips the deploy (see the
     # "Build site" step) and the last good site stays live until tomorrow.
-    - cron: "0 6 * * *"
+    - cron: "0 2 * * *"
   push:
     branches: [main]
   workflow_dispatch: {}
